@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="교내 예약">
+  <rect width="128" height="128" rx="24" fill="#0f766e"/>
+  <path d="M34 35h60a8 8 0 0 1 8 8v50a8 8 0 0 1-8 8H34a8 8 0 0 1-8-8V43a8 8 0 0 1 8-8Z" fill="#ffffff"/>
+  <path d="M26 52h76" stroke="#d7dee8" stroke-width="8"/>
+  <path d="M43 28v16M85 28v16" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
+  <path d="M45 72h14M69 72h14M45 88h28" stroke="#0f766e" stroke-width="8" stroke-linecap="round"/>
+</svg>

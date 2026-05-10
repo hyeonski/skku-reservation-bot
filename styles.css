@@ -1,0 +1,356 @@
+:root {
+  color-scheme: light;
+  --ink: #1f2933;
+  --muted: #65758b;
+  --line: #d7dee8;
+  --panel: #f7f9fc;
+  --accent: #0f766e;
+  --accent-dark: #0b5f59;
+  --danger: #b42318;
+  --white: #ffffff;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 420px;
+  min-height: 620px;
+  margin: 0;
+  color: var(--ink);
+  background: var(--white);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+}
+
+.options-shell {
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+.topbar,
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.eyebrow {
+  margin: 0 0 2px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+h2 {
+  font-size: 15px;
+}
+
+.icon-button,
+.ghost-button,
+.primary-button,
+.apply-button {
+  border: 0;
+  cursor: pointer;
+}
+
+.icon-button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+}
+
+.composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+textarea,
+input,
+select {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+}
+
+textarea {
+  min-height: 48px;
+  max-height: 120px;
+  resize: vertical;
+  padding: 12px;
+  line-height: 1.45;
+}
+
+input,
+select {
+  height: 38px;
+  padding: 0 10px;
+}
+
+.primary-button,
+.apply-button {
+  min-height: 42px;
+  border-radius: 8px;
+  color: var(--white);
+  background: var(--accent);
+  font-weight: 800;
+}
+
+.primary-button:hover,
+.apply-button:hover {
+  background: var(--accent-dark);
+}
+
+.composer .primary-button {
+  min-width: 72px;
+}
+
+.chat-log {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 330px;
+  max-height: 430px;
+  overflow-y: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.message {
+  display: grid;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.message.user {
+  justify-items: end;
+}
+
+.message.assistant {
+  justify-items: start;
+}
+
+.bubble {
+  max-width: 92%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  line-height: 1.45;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.message.user .bubble {
+  color: var(--white);
+  background: var(--accent);
+}
+
+.message.assistant .bubble {
+  border: 1px solid var(--line);
+  color: var(--ink);
+  background: var(--white);
+}
+
+.bubble-stack {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.chat-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-actions button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.chat-actions .primary-action {
+  border-color: var(--accent);
+  color: var(--white);
+  background: var(--accent);
+}
+
+.ghost-button {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.feedback,
+.defaults {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.confirmation-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.space-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+}
+
+.chat-log .space-card {
+  width: 100%;
+  background: #ffffff;
+}
+
+.space-card header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.space-card h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
+
+.space-card p {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  color: var(--accent-dark);
+  background: #dff5ef;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.risk {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.reason-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.reason {
+  padding: 4px 7px;
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--panel);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.defaults {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.feedback {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.feedback[hidden] {
+  display: none;
+}
+
+.rating-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.rating-button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--white);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rating-button.selected {
+  border-color: var(--accent);
+  color: var(--white);
+  background: var(--accent);
+}
+
+.feedback-message {
+  min-height: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.defaults label,
+.feedback label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}

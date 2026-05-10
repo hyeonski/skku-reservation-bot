@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>교내 예약 설정</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="shell options-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">SKKU SPACE AGENT</p>
+          <h1>설정</h1>
+        </div>
+      </header>
+
+      <section class="defaults">
+        <h2>API 서버</h2>
+        <label>
+          API Base URL
+          <input id="apiBaseUrlInput" type="url" placeholder="http://localhost:8787" />
+        </label>
+        <div class="confirmation-actions">
+          <button id="saveApiBaseUrlButton" class="primary-button" type="button">저장</button>
+          <button id="resetApiBaseUrlButton" class="ghost-button" type="button">기본값</button>
+        </div>
+        <p id="optionsMessage" class="feedback-message" aria-live="polite"></p>
+      </section>
+    </main>
+    <script type="module" src="src/options.js"></script>
+  </body>
+</html>
