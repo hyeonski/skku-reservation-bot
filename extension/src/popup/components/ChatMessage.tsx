@@ -1,12 +1,16 @@
 /**
  * 단일 메시지 버블.
- *
- * TODO: role 별 스타일링, 줄바꿈/링크 처리.
+ * - role 별 스타일링 (user 우측, assistant 좌측)
+ * - 줄바꿈 보존
  */
 
 import type { ChatMessage as ChatMessageType } from '../../shared/types';
 
-export function ChatMessage(_props: { message: ChatMessageType }) {
-  // TODO
-  return <div className="chat-message" />;
+export function ChatMessage({ message }: { message: ChatMessageType }) {
+  const roleClass = message.role === 'user' ? 'chat-message--user' : 'chat-message--assistant';
+  return (
+    <div className={`chat-message ${roleClass}`}>
+      <div className="chat-bubble">{message.content}</div>
+    </div>
+  );
 }

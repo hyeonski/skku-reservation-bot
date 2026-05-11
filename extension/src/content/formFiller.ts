@@ -1,23 +1,53 @@
 /**
- * 예약 모달 폼 채우기 (glsAgent.submitReservation의 하위 단계).
+ * 예약 모달 폼 채우기 (glsAgent.submitReservation 의 하위 단계).
  *
- * Nexacro set_value 위주 + cascade 필요한 콤보는 selectComboByText.
- * 자세한 매핑은 docs/GLS_DOM_NOTES.md §4·§6.
+ * - campus / building 은 이미 checkAvailability 단계에서 selectComboByText 로
+ *   cascade 트리거됨. 여기서는 set_value 로 안전 재커밋만 한다.
+ * - 나머지 필드(행사구분/단체/이름/인원/공간코드/날짜/시간/사용목적) 는 모두
+ *   set_value 로 직접 커밋.
  *
- * TODO: fillForm(dm, { campus, building, space, date, startTime, endTime, ...formData })
+ * 매핑 출처: docs/GLS_DOM_NOTES.md §4 / §6.
  */
 
+import { MODAL_FIELDS } from '@gls/nexacroPaths';
 import type { ReservationFormData } from '../shared/messages';
 import type { SpaceCandidate } from '../shared/types';
+import { runInPage } from './contentScript';
 
 export interface FillArgs {
   candidate: SpaceCandidate;
-  date: string;       // "yyyymmdd"
-  startTime: string;  // "HHMM"
-  endTime: string;    // "HHMM"
+  date: string; // "yyyymmdd"  (빈 문자열이면 set 생략)
+  startTime: string; // "HHMM"   (빈 문자열이면 set 생략)
+  endTime: string; // "HHMM"
   formData: ReservationFormData;
 }
 
-export async function fillForm(_args: FillArgs): Promise<void> {
-  // TODO
+export async function fillForm(args: FillArgs): Promise<void> {
+  const { candidate, date, startTime, endTime, formData } = args;
+
+  // suffix → value 페어 빌드. 빈 시간/날짜는 건너뜀.
+  const values: Record<string, string> = {
+    [MODAL_FIELDS.행사구분]: formData.hangsaGbCode,
+    [MODAL_FIELDS.주관단체]: formData.organization,
+    [MODAL_FIELDS.행사명]: formData.eventName,
+    [MODAL_FIELDS.행사인원]: String(formData.headcount),
+    [MODAL_FIELDS.사용목적]: formData.purpose,
+    [MODAL_FIELDS.공간]: candidate.glsSpaceCode,
+  };
+  if (date) values[MODAL_FIELDS.예약일] = date;
+  if (startTime) values[MODAL_FIELDS.시작시간] = startTime;
+  if (endTime) values[MODAL_FIELDS.종료시간] = endTime;
+
+  // campus/building 도 안전을 위해 코드값으로 재커밋 (cascade는 이미 발화됐다고 가정)
+  values[MODAL_FIELDS.캠퍼스] = candidate.campusCode;
+  values[MODAL_FIELDS.건물] = candidate.buildingNo;
+
+  const body = `(async () => {
+    var G = window.__GLS__;
+    var dm = G.activeModalDM();
+    G.setFormValues(dm, ${JSON.stringify(values)});
+    return true;
+  })()`;
+
+  await runInPage<boolean>(body, 10000);
 }
