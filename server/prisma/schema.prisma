@@ -1,0 +1,92 @@
+// Phase 1 스키마 — D-022(Space), D-023(Client, Conversation) 반영.
+// 시딩은 server/scripts/scrape-spaces.ts 에서 dsCboSpace를 dump하여 Space로 upsert.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- 사용자 (확장 설치 시 발급된 UUID) ----------
+
+model Client {
+  id            String         @id @db.Char(36) // UUID v4
+  createdAt     DateTime       @default(now())
+  lastSeenAt    DateTime       @updatedAt
+  conversations Conversation[]
+}
+
+// ---------- 대화 (D-018: 클라 권위 + 서버 매 턴 mirror) ----------
+
+enum ConversationStatus {
+  active
+  completed
+  abandoned_user
+  abandoned_timeout
+}
+
+model Conversation {
+  id              String             @id @db.Char(36)
+  clientId        String             @db.Char(36)
+  client          Client             @relation(fields: [clientId], references: [id])
+
+  status          ConversationStatus @default(active)
+  history         Json
+  lastIntent      String?            @db.VarChar(40)
+  lastFilledSlots Json?
+
+  startedAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  completedAt     DateTime?
+
+  @@index([clientId, updatedAt])
+  @@index([status, updatedAt])
+}
+
+// ---------- 공간 메타데이터 (D-022) ----------
+
+model Space {
+  id            String   @id @default(uuid()) @db.Char(36)
+
+  // GLS 식별 코드 (자동화 1순위)
+  glsSpaceCode  String   @unique @db.VarChar(40) // GU_SPACE_CD
+  campusCode    String   @db.VarChar(8)          // CAMPUS_CD "1" | "2"
+  buildingNo    String   @db.VarChar(16)         // BUILD_NO
+
+  // 표시명
+  campusName    String   @db.VarChar(40)
+  buildingName  String   @db.VarChar(80)
+  roomName      String   @db.VarChar(120)
+
+  // 정원 범위
+  capacityMin   Int
+  capacityMax   Int
+
+  // 학과 제한 / 운영 주체
+  useJojikCode   String?  @db.VarChar(20)
+  useJojikName   String?  @db.VarChar(120)
+  adminJojikCode String?  @db.VarChar(20)
+  adminJojikName String?  @db.VarChar(120)
+
+  // 공지 / 제약
+  contents      String?  @db.Text
+  limitDayYn    Boolean  @default(false)
+  limitDay      Int?
+  limitTimeYn   Boolean  @default(false)
+  limitTimeHHMM String?  @db.VarChar(4)
+  daeyeoGb      String?  @db.VarChar(4)
+
+  // 시딩 관리
+  scrapedAt     DateTime
+  active        Boolean  @default(true)
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([capacityMin, capacityMax])
+  @@index([campusCode, buildingNo])
+  @@index([useJojikCode])
+}

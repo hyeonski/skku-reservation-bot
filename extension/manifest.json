@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "SKKU 공간예약 에이전트",
+  "version": "0.1.0",
+  "description": "자연어로 GLS 공간예약을 자동화합니다.",
+  "action": {
+    "default_popup": "src/popup/index.html",
+    "default_title": "SKKU 공간예약"
+  },
+  "background": {
+    "service_worker": "src/background/serviceWorker.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://kingoinfo.skku.edu/*"],
+      "js": ["src/content/contentScript.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": ["storage", "tabs", "scripting", "notifications"],
+  "host_permissions": [
+    "https://kingoinfo.skku.edu/*",
+    "https://login.skku.edu/*",
+    "http://localhost:3000/*"
+  ]
+}
