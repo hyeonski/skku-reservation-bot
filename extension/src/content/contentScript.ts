@@ -105,6 +105,7 @@ chrome.runtime.onMessage.addListener(
               m.date,
               m.startHour,
               m.endHour,
+              { formData: m.formData, startTime: m.startTime, endTime: m.endTime },
             );
             const reply: ContentAvailabilityResult = {
               type: 'CONTENT_AVAILABILITY_RESULT',

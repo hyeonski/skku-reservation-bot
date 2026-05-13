@@ -87,6 +87,14 @@ export interface BgCheckAvailability {
   date: string;
   startHour: number;
   endHour: number;
+  /**
+   * 제공되면 가용 판정 직후 폼 전체 (행사구분/단체/이름/사용목적 등) 까지
+   * preview 로 채워둔다. 사용자가 GLS 탭에서 모달 상태를 시각적으로 확인 가능.
+   * 실제 저장은 별도 BG_SUBMIT_RESERVATION 에서.
+   */
+  formData?: ReservationFormData;
+  startTime?: string; // "HH:MM"
+  endTime?: string;   // "HH:MM"
 }
 
 export interface BgSubmitReservation {

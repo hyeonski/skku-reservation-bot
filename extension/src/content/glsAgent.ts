@@ -60,6 +60,11 @@ export async function checkAvailability(
   date: string,
   startHour: number,
   endHour: number,
+  options?: {
+    formData?: ReservationFormData;
+    startTime?: string;
+    endTime?: string;
+  },
 ): Promise<{
   available: boolean;
   conflicts: Array<{ kind: string; timeTerm: string; info: string }>;
@@ -69,23 +74,41 @@ export async function checkAvailability(
   const yyyymmdd = toYyyymmdd(date);
 
   // 캠퍼스 / 건물 cascade — code 값을 직접 set 하고 OnChanged 명시 호출.
-  // (dropdown 클릭 기반 selectComboByText 는 새 탭 fresh 모달에서 combolist
-  //  lazy render race 가 있어 불안정.)
   console.log('[GLS-iso] step: set campus', candidate.campusCode, `(${candidate.campusName})`);
   await runInPage('setComboAndFireChange', {
     suffix: 'cboCampusCd',
     value: candidate.campusCode,
   });
-  await sleep(700);
+
+  // 캠퍼스 cascade transaction 이 끝나서 dsCboBuildCd 에 target buildingNo row 가
+  // 나타날 때까지 대기. set_value 가 dataset 매칭 row 를 찾지 못하면 text 가 빈칸으로
+  // 표시되는 현상이 있어 (검증 2026-05-13), 폴링 필수.
+  console.log('[GLS-iso] waiting for dsCboBuildCd to load', candidate.buildingNo);
+  await runInPage('waitForDatasetValue', {
+    dsName: 'dsCboBuildCd',
+    column: 'BUILD_NO',
+    value: candidate.buildingNo,
+    timeoutMs: 5000,
+  });
+
   console.log('[GLS-iso] step: prime calUseDt', yyyymmdd);
   await runInPage('setComponentValue', { suffix: 'calUseDt', value: yyyymmdd });
   await sleep(200);
+
   console.log('[GLS-iso] step: set building', candidate.buildingNo, `(${candidate.buildingName})`);
   await runInPage('setComboAndFireChange', {
     suffix: 'cboBuildCd',
     value: candidate.buildingNo,
   });
-  await sleep(1500);
+
+  // 건물 cascade 후 dsCboSpace 에 target glsSpaceCode 가 들어올 때까지 대기.
+  console.log('[GLS-iso] waiting for dsCboSpace to load', candidate.glsSpaceCode);
+  await runInPage('waitForDatasetValue', {
+    dsName: 'dsCboSpace',
+    column: 'GU_SPACE_CD',
+    value: candidate.glsSpaceCode,
+    timeoutMs: 5000,
+  });
 
   // 공간 row 클릭 → dsGrdSub 갱신 + cboSpaceCd auto-set
   console.log('[GLS-iso] step: click space row', candidate.glsSpaceCode);
@@ -100,6 +123,23 @@ export async function checkAvailability(
   const schedule = await runInPage<SpaceScheduleRow[]>('readDsGrdSub');
   const conflicts = computeConflicts(schedule, yyyymmdd, startHour, endHour);
   console.log('[GLS-iso] checkAvailability done — conflicts:', conflicts.length);
+
+  // Preview: formData 가 미리 제공된 경우 (dev panel / 행사메타 collector) 폼 전체를
+  // 채워서 사용자가 GLS 탭에서 시각적으로 검증할 수 있게 한다. 저장은 별도 단계.
+  if (options?.formData && conflicts.length === 0) {
+    console.log('[GLS-iso] step: fillForm preview');
+    try {
+      await fillForm({
+        candidate,
+        date: yyyymmdd,
+        startTime: options.startTime ? toHHMM(options.startTime) : '',
+        endTime: options.endTime ? toHHMM(options.endTime) : '',
+        formData: options.formData,
+      });
+    } catch (e) {
+      console.warn('[GLS-iso] fillForm preview failed (non-fatal):', e);
+    }
+  }
 
   return { available: conflicts.length === 0, conflicts };
 }

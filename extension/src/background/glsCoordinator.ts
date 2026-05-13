@@ -244,6 +244,10 @@ async function searchNext(
         date: state.date,
         startHour: state.startHour,
         endHour: state.endHour,
+        // formData 가 미리 있으면 preview 단계에서 폼 채움 (dev panel / 향후 행사메타 collector).
+        formData: state.pendingFormData,
+        startTime: state.startTime,
+        endTime: state.endTime,
       });
     } catch (e) {
       // Skip on transient content errors; continue with next candidate.

@@ -232,6 +232,37 @@ declare global {
     },
 
     /**
+     * 데이터셋에 (column == value) 인 row 가 나타날 때까지 폴링.
+     * 캠퍼스 → 건물 cascade 처럼 비동기 transaction 결과를 기다릴 때 사용.
+     */
+    waitForDatasetValue: async (args: {
+      dsName: string;
+      column: string;
+      value: string;
+      timeoutMs?: number;
+    }): Promise<true> => {
+      const timeoutMs = args.timeoutMs ?? 5000;
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        try {
+          const ds = activePopupForm()[args.dsName];
+          if (ds && typeof ds.getRowCount === 'function') {
+            for (let i = 0; i < ds.getRowCount(); i++) {
+              if (String(ds.getColumn(i, args.column)) === String(args.value)) {
+                console.log('[GLS] waitForDatasetValue ✓', args.dsName, args.column, '=', args.value);
+                return true;
+              }
+            }
+          }
+        } catch (_) { /* dataset not ready */ }
+        await wait(200);
+      }
+      throw new Error(
+        `dataset ${args.dsName}.${args.column} did not contain "${args.value}" within ${timeoutMs}ms`,
+      );
+    },
+
+    /**
      * 콤보를 코드 값으로 set 하고 cascade OnChanged 핸들러를 명시 호출.
      *
      * dropdown 클릭 기반 selectComboByText 는 새 탭 fresh 모달에서 combolist
