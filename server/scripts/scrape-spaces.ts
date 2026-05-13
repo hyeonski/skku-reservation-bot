@@ -139,10 +139,33 @@ const HELPER_INIT_SCRIPT = `
     }
     return rows;
   }
+  // 콤보를 코드값으로 set 하고 OnChanged 명시 호출.
+  // dropdown 클릭 기반 selectComboByText 는 Nexacro 의 combolist lazy render 에서
+  // 일부 옵션(예: 자연/N센터) 이 누락되는 케이스가 있어 (검증 2026-05-13),
+  // 코드값을 이미 알고 있는 캠퍼스/건물 cascade 에서는 이 경로가 더 견고.
+  function setComboAndFireChange(comboSuffix, value) {
+    const dm = activeModalDM();
+    const popupForm = activePopupForm();
+    const cmp = dm[comboSuffix];
+    if (!cmp) throw new Error('component not found: ' + comboSuffix);
+    const prev = cmp.value;
+    cmp.set_value(value);
+    const handler = popupForm['divManage_' + comboSuffix + '_OnChanged'];
+    if (typeof handler === 'function') {
+      try {
+        handler.call(popupForm, cmp, {
+          fromobject: cmp,
+          postvalue: value,
+          prevalue: prev == null ? '' : prev,
+        });
+      } catch (_) { /* alert 등 비치명 */ }
+    }
+  }
   window.__gls = {
     nexClick, byIdSuffix, findByText,
     activePopupForm, activeModalDM,
     selectComboByText, readDataset,
+    setComboAndFireChange,
   };
 })();
 `;
@@ -281,12 +304,17 @@ async function dismissAlertIfShown(page: Page): Promise<void> {
 
 async function selectCampus(
   page: Page,
-  campusName: string,
+  _campusName: string,
   campusCode: string,
 ): Promise<void> {
-  await nativeSelectCombo(page, MODAL_FIELDS.캠퍼스, campusName);
-  // dsCboBuildCd 가 새 캠퍼스 row 들로 갱신될 때까지 폴링 (sleep(1500) 단독은
-  // 느린 네트워크에서 race). distinctCampus mismatch 재시도는 호출부에서 유지.
+  // dropdown 클릭 우회 — code 직접 set + OnChanged (extension 자동화와 동일 패턴).
+  await page.evaluate(
+    ({ suffix, code }) => {
+      (window as any).__gls.setComboAndFireChange(suffix, code);
+    },
+    { suffix: MODAL_FIELDS.캠퍼스, code: campusCode },
+  );
+  // dsCboBuildCd 가 새 캠퍼스 row 들로 갱신될 때까지 폴링.
   await page
     .waitForFunction(
       ({ ds, code }) => {
@@ -382,11 +410,18 @@ async function readBuildings(page: Page): Promise<BuildingRow[]> {
 
 async function selectBuilding(
   page: Page,
-  buildingName: string,
+  _buildingName: string,
   expectedBuildNo: string,
 ): Promise<void> {
-  await nativeSelectCombo(page, MODAL_FIELDS.건물, buildingName);
-  // cascade가 자동으로 안 도는 경우가 있어 fncSpaceSearch 명시 호출
+  // dropdown 클릭 우회 — code 직접 set + OnChanged. 자연/N센터 처럼 dsCboBuildCd
+  // 에는 있지만 combolist DOM 에서 누락되는 옵션이 있어도 안전하게 통과.
+  await page.evaluate(
+    ({ suffix, code }) => {
+      (window as any).__gls.setComboAndFireChange(suffix, code);
+    },
+    { suffix: MODAL_FIELDS.건물, code: expectedBuildNo },
+  );
+  // fncSpaceSearch 안전 호출 (대부분 OnChanged 안에서 자동 발화)
   await page.evaluate(() => {
     const g = (window as any).__gls;
     const pf = g.activePopupForm();
@@ -681,6 +716,8 @@ async function main(): Promise<void> {
 
           let upserted = 0;
           for (const sp of spaces) {
+            // placeholder row (dsCboSpace 의 첫 row 는 항상 {GU_SPACE_CD:"", SPACE_NM:"선택"})
+            if (!sp.GU_SPACE_CD || sp.GU_SPACE_CD === '') continue;
             // 안전장치 — 다른 건물의 공간이 섞여 있으면 skip
             if (sp.BUILD_NO && sp.BUILD_NO !== building.BUILD_NO) continue;
             try {
