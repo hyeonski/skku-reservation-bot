@@ -14,6 +14,12 @@
   "content_scripts": [
     {
       "matches": ["https://kingoinfo.skku.edu/*"],
+      "js": ["src/content/bridgeMainWorld.ts"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://kingoinfo.skku.edu/*"],
       "js": ["src/content/contentScript.ts"],
       "run_at": "document_idle"
     }
