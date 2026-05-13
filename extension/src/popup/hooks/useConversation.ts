@@ -16,6 +16,7 @@ import type {
   PopupToBackground,
   BackgroundToPopup,
   BgChatResponse,
+  ReservationFormData,
 } from '../../shared/messages';
 
 export interface UseConversationResult {
@@ -27,6 +28,12 @@ export interface UseConversationResult {
   sendMessage: (text: string) => Promise<void>;
   confirmReservation: (confirmed: boolean) => Promise<void>;
   cancel: () => void;
+  /** Dev: 채팅·LLM·서버 우회하고 자동화만 직접 트리거. */
+  runDevAutomation: (args: {
+    slots: import('../../shared/types').FilledSlots;
+    candidates: SpaceCandidate[];
+    formData: ReservationFormData;
+  }) => Promise<void>;
 }
 
 /** chrome.runtime.sendMessage 의 Promise 래퍼 */
@@ -176,6 +183,35 @@ export function useConversation(): UseConversationResult {
     [candidate, conversationId, appendAssistant],
   );
 
+  const runDevAutomation = useCallback(
+    async (args: {
+      slots: import('../../shared/types').FilledSlots;
+      candidates: SpaceCandidate[];
+      formData: ReservationFormData;
+    }) => {
+      if (busy) return;
+      setBusy(true);
+      // 채팅 메시지 영역에 한 줄 남겨 dev 트리거임을 표시
+      appendAssistant(
+        `[dev] 자동화 시작 — ${args.candidates.length}개 후보, ${args.slots.date} ${args.slots.start_time}-${args.slots.end_time}`,
+      );
+      try {
+        await sendToBackground({
+          type: 'POPUP_DEV_RUN_AUTOMATION',
+          conversationId,
+          slots: args.slots,
+          candidates: args.candidates,
+          formData: args.formData,
+        });
+      } catch (e) {
+        appendAssistant(`[dev] 트리거 실패: ${(e as Error).message}`);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, conversationId, appendAssistant],
+  );
+
   const cancel = useCallback(() => {
     void sendToBackground({ type: 'POPUP_CANCEL', conversationId });
     setMessages([]);
@@ -203,5 +239,6 @@ export function useConversation(): UseConversationResult {
     sendMessage,
     confirmReservation,
     cancel,
+    runDevAutomation,
   };
 }

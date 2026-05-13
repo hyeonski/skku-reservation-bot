@@ -10,9 +10,11 @@
  * useConversation 훅이 background SW와의 메시지 송수신을 담당.
  */
 
+import { useState } from 'react';
 import { useConversation } from './hooks/useConversation';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
+import { DevPanel } from './components/DevPanel';
 import type { AutomationStatus, SpaceCandidate } from '../shared/types';
 
 function statusLabel(status: AutomationStatus): string | null {
@@ -94,7 +96,9 @@ export function App() {
     sendMessage,
     confirmReservation,
     cancel,
+    runDevAutomation,
   } = useConversation();
+  const [mode, setMode] = useState<'chat' | 'dev'>('chat');
 
   const label = statusLabel(status);
   const active = isActive(status);
@@ -134,6 +138,14 @@ export function App() {
         {active && <span className="badge badge--active">예약 진행 중…</span>}
         <button
           type="button"
+          className={`app__mode-toggle ${mode === 'dev' ? 'app__mode-toggle--active' : ''}`}
+          onClick={() => setMode((m) => (m === 'chat' ? 'dev' : 'chat'))}
+          title="자동화만 테스트 (LLM·서버 우회)"
+        >
+          {mode === 'dev' ? '💬 chat' : '🛠 dev'}
+        </button>
+        <button
+          type="button"
           className="app__reset"
           onClick={cancel}
           title="대화 초기화"
@@ -143,14 +155,24 @@ export function App() {
       </header>
 
       <main className="app__main">
-        <ChatHistory messages={messages} footer={footer} />
+        {mode === 'chat' ? (
+          <ChatHistory messages={messages} footer={footer} />
+        ) : (
+          <>
+            <DevPanel busy={busy} onRun={runDevAutomation} />
+            {/* dev 모드에서도 후보 카드 / 로그인 안내는 동일하게 사용 */}
+            <div className="dev-panel__footer">{footer}</div>
+          </>
+        )}
       </main>
 
       {label && (
         <div className={`status-bar status-bar--${status.kind}`}>{label}</div>
       )}
 
-      <ChatInput onSubmit={(t) => void sendMessage(t)} disabled={busy} />
+      {mode === 'chat' && (
+        <ChatInput onSubmit={(t) => void sendMessage(t)} disabled={busy} />
+      )}
     </div>
   );
 }

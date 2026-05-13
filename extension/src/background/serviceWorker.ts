@@ -161,6 +161,12 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       return false;
     }
 
+    case 'POPUP_DEV_RUN_AUTOMATION':
+      handleDevRunAutomation(msg)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
     default:
       return false;
   }
@@ -242,11 +248,13 @@ async function handleConfirm(
     return;
   }
 
-  // formData is "제출 필수, /parse 범위 외" (D-021). Popup is expected to collect
-  // these in a confirm form. If not yet wired, fall back to placeholders so the
-  // flow can be exercised end-to-end and slice 9 can replace the path.
+  // formData 우선순위:
+  //   1. 사용자가 confirm 시 함께 보낸 값 (chat 흐름의 행사메타 collector — 아직 미구현)
+  //   2. queue 에 미리 저장된 pendingFormData (DevPanel 또는 향후 행사메타 사전입력)
+  //   3. TODO placeholder (디버그 폴백 — 실제 GLS에서는 거부될 가능성)
   const formData: ReservationFormData =
     msg.formData ??
+    queue.pendingFormData ??
     ({
       hangsaGbCode: 'TODO',
       organization: 'TODO',
@@ -278,6 +286,30 @@ async function handleConfirm(
           })
           .catch((e) => console.warn('[SW] completed mirror failed:', e));
       }
+    })
+    .catch((e) => {
+      emit({ kind: 'error', message: (e as Error).message });
+    });
+}
+
+async function handleDevRunAutomation(
+  msg: Extract<PopupToBackground, { type: 'POPUP_DEV_RUN_AUTOMATION' }>,
+): Promise<void> {
+  // Dev 진입점 — 채팅·LLM·서버 전부 우회.
+  // 슬롯·후보·formData 를 popup의 DevPanel에서 그대로 받아 runReservationFlow 에 주입.
+  const emit = makeStatusEmitter(msg.conversationId);
+  // SW context도 만들어두면 popup 재오픈 시 status 복원 가능
+  const ctx = getOrCreateContext(msg.conversationId);
+  ctx.lastFilledSlots = msg.slots;
+  void persistContexts();
+
+  void gls
+    .runReservationFlow({
+      conversationId: msg.conversationId,
+      slots: msg.slots,
+      candidates: msg.candidates,
+      pendingFormData: msg.formData,
+      onStatusChange: emit,
     })
     .catch((e) => {
       emit({ kind: 'error', message: (e as Error).message });

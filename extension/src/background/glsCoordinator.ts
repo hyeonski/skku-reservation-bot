@@ -42,6 +42,8 @@ export interface CandidateQueueState {
   totalCount: number;
   triedCount: number;
   lastProposed: SpaceCandidate | null;
+  /** Dev panel·미래의 행사메타 collector가 미리 채워둔 formData. confirm 시 fallback 으로 사용. */
+  pendingFormData?: ReservationFormData;
 }
 
 const queues = new Map<string, CandidateQueueState>();
@@ -91,6 +93,10 @@ export interface RunReservationFlowArgs {
   conversationId: string;
   slots: FilledSlots;
   onStatusChange: (s: AutomationStatus) => void;
+  /** Dev: candidates 를 외부에서 주입하면 서버 /spaces 호출을 건너뛴다. */
+  candidates?: SpaceCandidate[];
+  /** Dev: confirm 시 사용할 formData 를 미리 큐에 저장. */
+  pendingFormData?: ReservationFormData;
 }
 
 export async function runReservationFlow(args: RunReservationFlowArgs): Promise<void> {
@@ -137,16 +143,20 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
-  // fetch candidates
+  // fetch candidates (또는 dev 주입 사용)
   let candidates: SpaceCandidate[];
-  try {
-    candidates = await apiClient.listSpaces({
-      headcount: slots.headcount,
-      ...pickFirstCampusBuilding(slots),
-    });
-  } catch (e) {
-    onStatusChange({ kind: 'error', message: `후보 조회 실패: ${(e as Error).message}` });
-    return;
+  if (args.candidates && args.candidates.length > 0) {
+    candidates = args.candidates;
+  } else {
+    try {
+      candidates = await apiClient.listSpaces({
+        headcount: slots.headcount,
+        ...pickFirstCampusBuilding(slots),
+      });
+    } catch (e) {
+      onStatusChange({ kind: 'error', message: `후보 조회 실패: ${(e as Error).message}` });
+      return;
+    }
   }
 
   if (candidates.length === 0) {
@@ -169,6 +179,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     totalCount: candidates.length,
     triedCount: 0,
     lastProposed: null,
+    pendingFormData: args.pendingFormData,
   };
   queues.set(conversationId, state);
 
