@@ -73,10 +73,9 @@ skku-reservation-bot/
 │       ├── llm/                # DeepSeek 클라이언트
 │       └── schemas/            # Zod
 ├── shared/
-│   └── gls/                    # D-017: 양 프로젝트가 import
+│   └── gls/                    # D-017: 양 프로젝트가 타입·상수만 import
 │       ├── nexacroPaths.ts     # Nexacro 컴포넌트 id suffix 사전 (M-코드, cboBuildCd 등)
-│       ├── nexacroActions.ts   # nexClick / activePopupForm / selectComboByText / readDataset 등 헬퍼
-│       └── schemas.ts          # dsCboSpace, dsGrdSub row 타입 등
+│       └── schemas.ts          # dsCboSpace, dsGrdSub row 타입 + toNumber 헬퍼
 └── docs/
     ├── PRD.md
     ├── DECISIONS.md
@@ -257,20 +256,29 @@ skku-reservation-bot/
 
 ## D-017. GLS 자동화 공유 모듈 위치: 최상위 `shared/gls/`
 
-- **일자**: 2026-05-12 (PoC 결과 반영하여 같은 날 개정 — "셀렉터·파서" → Nexacro 헬퍼·경로 사전)
-- **결정**: GLS 자동화에 필요한 공유 코드를 최상위 `shared/gls/`에 두고, `extension/`과 `server/`가 tsconfig `paths` (`@gls/*`)로 import한다.
-- **모듈 구성** (PoC 후 확정):
+- **일자**: 2026-05-12 (PoC 반영 개정 — "셀렉터·파서" → Nexacro 헬퍼·경로 사전)
+- **개정**: 2026-05-14 — 실행 함수 공유 불가 확인, `nexacroActions.ts` 제거
+- **결정**: GLS 자동화에 필요한 **타입·상수**를 최상위 `shared/gls/`에 두고, `extension/`과 `server/`가 tsconfig `paths` (`@gls/*`)로 import한다.
+- **모듈 구성**:
   - `nexacroPaths.ts` — Nexacro 컴포넌트 id suffix 사전 (M-코드 메뉴, `cboBuildCd`/`btnInsert4`/`calUseDt` 등). DOM 매칭 시 `[id$=".<suffix>"]:not([id$=":icontext"])` 패턴.
-  - `nexacroActions.ts` — 자동화 헬퍼: `nexClick(el)`, `activePopupForm()`, `selectComboByText(form, suffix, label)`, `readDataset(form, dsName)`, `setValues(form, {...})`, `dismissNoticeIfShown()` 등.
-  - `schemas.ts` — `dsCboSpace`, `dsGrdSub`, `dsGrdMainNew` 등 row 타입 정의 (TypeScript interface). 시딩 스크립트와 확장 양쪽이 같은 타입으로 핸들링.
+  - `schemas.ts` — `dsCboSpace`, `dsGrdSub`, `dsGrdMainNew` 등 row 타입 정의 + `toNumber` 헬퍼 (Nexacro `{hi, lo}` 정규화). 시딩 스크립트와 확장 양쪽이 동일 타입으로 핸들링.
 - **배경**:
   - 원안은 CSS 셀렉터 + DOM 파서를 가정했으나, PoC에서 GLS가 **Nexacro Platform SPA**임이 확인되고 CSS 셀렉터는 거의 무용지물이라는 결론(GLS_DOM_NOTES §6). 대신 Nexacro 컴포넌트 API 직접 호출이 정답.
-  - D-015 sub-결정 4 (셀렉터 공유)는 그대로 유효하나 공유할 대상의 성격이 달라짐.
+
+### 2026-05-14 개정: `nexacroActions.ts` 삭제
+
+자동화 헬퍼 함수(`nexClick`/`activePopupForm`/`selectComboByText` 등)는 원래 공통 모듈로 단일화 의도였으나, 실행 환경의 비대칭이 단일화를 막는다.
+
+- **Main-world 브리지** (`extension/src/content/bridgeMainWorld.ts`) — manifest `world:"MAIN"` 으로 GLS 페이지 컨텍스트에 주입. CSP 가 `unsafe-eval` 거부해서 동적 op 등록이 불가능하고, RPC 채널(`postMessage`)도 Nexacro `__pWindow._on_default_sys_message` 와 충돌해 CustomEvent 로 분리. 결과적으로 자체 op 레지스트리를 들고 있음.
+- **Playwright 시딩 스크립트** (`server/scripts/scrape-spaces.ts`) — Node 호스트라 `window.nexacro` 직접 접근 불가, TS 모듈을 page context 로 옮길 수도 없음. `HELPER_INIT_SCRIPT` raw 문자열을 `page.addInitScript` 로 주입.
+- **확장 isolated world** (`glsAgent.ts` 외) — `window.nexacro` 접근 불가, 브리지에 RPC 위임.
+
+세 환경이 nexacroActions.ts 를 직접 호출할 길이 없어 — TypeScript import 시 컴파일은 통과해도 런타임에 함수가 실행되지 않음. 호출자 없는 함수는 silent rot 위험만 키운다 (시그니처 변경해도 빌드 그린). 따라서 함수 본체는 각 환경에 인라인 유지하고, `nexacroActions.ts` 는 삭제.
+
 - **영향**:
-  - 레포 최상위에 `shared/gls/` (D-004 디렉터리 윤곽 갱신됨).
-  - 양쪽 `tsconfig.json`에 `paths` 매핑 (`@gls/*` → `../shared/gls/*`).
-  - 서버 측 `tsx` 실행 시 path 인식 위해 `tsconfig-paths` 또는 `tsx`의 기본 동작 확인 필요.
-  - `shared/gls/`의 헬퍼들은 **GLS 페이지의 `window.nexacro` 전역에 의존**하므로 서버 측에서 import만 하고 직접 호출할 때는 Playwright `page.evaluate` 컨텍스트 안에서만 사용 가능. 타입·상수는 어디서나 사용 가능.
+  - 양쪽 `tsconfig.json` 의 `paths` 매핑 (`@gls/*`) 유지 — 타입·상수 import 는 계속 작동.
+  - 새 자동화 동작을 추가할 땐 **bridgeMainWorld + scrape-spaces 양쪽 인라인 헬퍼를 함께 갱신**해야 한다는 규약. 공유 단일 소스 없음.
+  - GLS DOM 셀렉터 패턴이 바뀌면 `nexacroPaths.ts` 한 곳만 수정하면 양쪽이 자동으로 따라온다 (path 상수는 import 됨).
 
 ---
 

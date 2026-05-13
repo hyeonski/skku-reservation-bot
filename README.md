@@ -30,8 +30,9 @@ skku-reservation-bot/
 │
 ├── shared/gls/         확장·서버가 함께 import (tsconfig paths @gls/*)
 │   ├── nexacroPaths.ts    GLS Nexacro 컴포넌트 id 사전 (M-코드 등)
-│   ├── nexacroActions.ts  자동화 헬퍼 (nexClick, set_value, dsGrdSub 판정)
-│   └── schemas.ts          Nexacro 데이터셋 row 타입
+│   └── schemas.ts         Nexacro 데이터셋 row 타입 + toNumber 헬퍼
+│   # 자동화 함수 본체는 실행 환경 격리로 공유 불가 (D-017 개정 참조).
+│   # bridgeMainWorld.ts / scrape-spaces.ts 가 각자 인라인 유지.
 │
 └── docs/
     ├── PRD.md           통합 PRD 요약
@@ -200,7 +201,7 @@ cd extension && pnpm exec tsc --noEmit
 
 P1 코드는 컴파일과 단위 흐름까진 통과했지만 실제 GLS에서 검증해야 튜닝이 끝나는 항목들:
 
-- `clickSpaceRow` / `dismissNoticeIfShown` 정확도 — 1차 휴리스틱 ([shared/gls/nexacroActions.ts](shared/gls/nexacroActions.ts) TODO 참조)
+- `clickSpaceRow` / `dismissNoticeIfShown` 정확도 — bridge `ops` 와 시딩 헬퍼에 인라인. GLS 페이지 변동 시 [extension/src/content/bridgeMainWorld.ts](extension/src/content/bridgeMainWorld.ts) + [server/scripts/scrape-spaces.ts](server/scripts/scrape-spaces.ts) 양쪽 갱신 필요.
 - 저장 후 성공/실패 감지 (5초 폴링) — 실제 GLS 응답 메시지 텍스트 확정 후 튜닝
 - 행사 메타(행사구분 코드·주관단체·사용목적) 수집 UI — popup 확인 단계에 폼 추가 필요
 - 자연어 건물명 → `campusCode`/`buildingNo` 매핑 — DB lookup으로 보강

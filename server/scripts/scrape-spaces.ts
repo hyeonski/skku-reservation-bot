@@ -17,10 +17,12 @@
  * 5. 각 row를 D-022 Space 모델로 Prisma upsert (glsSpaceCode unique key, 멱등)
  * 6. 이번 run에 못 본 행은 active=false로 soft-delete
  *
- * 헬퍼는 `shared/gls/nexacroActions.ts`에서 타입만 참조하고, page.evaluate
- * 콜백 안에서는 동일 로직을 인라인 재구현(브라우저 컨텍스트로 함수 전달이
- * 제약이 있어, 작은 스크립트인 점을 고려해 D-017에 명시된 "둘 다 허용" 중
- * 인라인 방식 채택).
+ * Nexacro 자동화 헬퍼 (nexClick / activePopupForm / selectCombo 등) 는
+ * `HELPER_INIT_SCRIPT` raw 문자열로 인라인 정의 후 page.addInitScript 로 주입.
+ * Playwright Node 호스트는 `window.nexacro` 에 직접 접근할 수 없고 TS 모듈을
+ * page context 로 직접 전달할 수도 없어서, page.evaluate 안에서 동작하는
+ * 헬퍼는 이 스크립트 안에서 자체 구현. 타입과 path 상수는 `@gls/schemas`,
+ * `@gls/nexacroPaths` 에서 import (D-017 개정 — 2026-05-14).
  */
 
 import { PrismaClient } from '@prisma/client';
