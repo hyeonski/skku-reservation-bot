@@ -85,19 +85,31 @@ export function activeModalDM(): any {
 /**
  * 콤보박스를 텍스트 라벨로 선택. cascade(onItemChanged) 발화에 필요.
  * 내부적으로 dropbutton 클릭 → combolist.item_N 텍스트 매칭 후 클릭.
+ *
+ * 주의: Nexacro 컴포넌트의 `.id`는 short name(예: `"cboCampusCd"`)만 노출되고
+ * 풀패스가 아니라서 `document.getElementById(combo.id + '.dropbutton')`는 항상 null.
+ * 또한 같은 suffix가 페이지 본체 `divSearch`와 모달 `divManage` 양쪽에 존재하므로,
+ * **현재 popupFrame prefix로 좁힌 suffix 매칭**을 사용해야 모달 안의 콤보만 안전하게 잡힌다.
  */
 export function selectComboByText(dm: any, comboSuffix: string, label: string): void {
   const combo = dm[comboSuffix];
   if (!combo) throw new Error(`combo not found: ${comboSuffix}`);
-  const dropId = combo.id + '.dropbutton';
-  const drop = document.getElementById(dropId);
-  if (!drop) throw new Error(`dropbutton not found: ${dropId}`);
+
+  const app = nexacro.getApplication();
+  const top = app.mainframe.TopFrame;
+  const popupKeys = Object.keys(top).filter((k) => k.startsWith('popupFrame'));
+  if (popupKeys.length === 0) throw new Error('no popupFrame open');
+  const popupPrefix = `mainframe.TopFrame.${popupKeys[popupKeys.length - 1]}.`;
+
+  const dropSel = `div[id^="${popupPrefix}"][id$=".${comboSuffix}.dropbutton"]:not([id$=":icontext"])`;
+  const drop = document.querySelector<HTMLElement>(dropSel);
+  if (!drop) throw new Error(`dropbutton not found: ${dropSel}`);
   nexClick(drop);
 
-  const itemPrefix = combo.id + '.combolist.item_';
-  const items = Array.from(
-    document.querySelectorAll<HTMLElement>('div[id*=".combolist.item_"]'),
-  ).filter((d) => d.id.startsWith(itemPrefix) && !d.id.endsWith(':text'));
+  const itemSel = `div[id^="${popupPrefix}"][id*=".${comboSuffix}.combolist.item_"]`;
+  const items = Array.from(document.querySelectorAll<HTMLElement>(itemSel)).filter(
+    (d) => !d.id.endsWith(':text'),
+  );
   const target = items.find((it) => it.innerText.trim() === label);
   if (!target) {
     const available = items.map((i) => i.innerText.trim()).join(', ');

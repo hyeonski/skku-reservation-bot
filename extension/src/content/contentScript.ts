@@ -94,15 +94,26 @@ const BRIDGE_SOURCE = String.raw`
   };
 
   G.selectComboByText = function (dm, comboSuffix, label) {
+    // Nexacro 컴포넌트의 .id는 short name만 줘서 풀패스 매칭 불가.
+    // 같은 suffix가 divSearch(페이지)와 divManage(모달) 양쪽에 있으므로
+    // 현재 popupFrame prefix로 좁힌 suffix 매칭으로 모달 콤보만 잡는다.
     var combo = dm[comboSuffix];
     if (!combo) throw new Error('combo not found: ' + comboSuffix);
-    var drop = document.getElementById(combo.id + '.dropbutton');
-    if (!drop) throw new Error('dropbutton not found: ' + combo.id);
+    var app = window.nexacro.getApplication();
+    var top = app.mainframe.TopFrame;
+    var popupKeys = Object.keys(top).filter(function (k) { return k.indexOf('popupFrame') === 0; });
+    if (popupKeys.length === 0) throw new Error('no popupFrame open');
+    var popupPrefix = 'mainframe.TopFrame.' + popupKeys[popupKeys.length - 1] + '.';
+
+    var dropSel = 'div[id^="' + popupPrefix + '"][id$=".' + comboSuffix + '.dropbutton"]:not([id$=":icontext"])';
+    var drop = document.querySelector(dropSel);
+    if (!drop) throw new Error('dropbutton not found: ' + dropSel);
     G.nexClick(drop);
-    var prefix = combo.id + '.combolist.item_';
+
+    var itemSel = 'div[id^="' + popupPrefix + '"][id*=".' + comboSuffix + '.combolist.item_"]';
     var items = Array.prototype.slice
-      .call(document.querySelectorAll('div[id*=".combolist.item_"]'))
-      .filter(function (d) { return d.id.indexOf(prefix) === 0 && d.id.indexOf(':text') !== d.id.length - 5; });
+      .call(document.querySelectorAll(itemSel))
+      .filter(function (d) { return !d.id.endsWith(':text'); });
     var target = null;
     for (var i = 0; i < items.length; i++) {
       if (items[i].innerText.trim() === label) { target = items[i]; break; }
