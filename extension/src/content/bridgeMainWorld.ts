@@ -319,7 +319,7 @@ declare global {
      * 공간 시간표 row 를 cell DOM 직접 클릭하여 dsGrdSub 로드 트리거.
      * Nexacro grdCal.selectRow 만으로는 side-effect 가 안 도는 것이 검증됐음.
      */
-    clickSpaceRow: (args: { glsSpaceCode: string }): true => {
+    clickSpaceRow: async (args: { glsSpaceCode: string }): Promise<true> => {
       const form = activePopupForm();
       const ds = form.dsGrdMainNew;
       console.log('[GLS] clickSpaceRow', args.glsSpaceCode, 'dsGrdMainNew rows:', ds.getRowCount());
@@ -335,10 +335,26 @@ declare global {
         for (let i = 0; i < ds.getRowCount(); i++) avail.push(String(ds.getColumn(i, 'GU_SPACE_CD')));
         throw new Error(`space ${args.glsSpaceCode} not in dsGrdMainNew. Available: [${avail.join(',')}]`);
       }
+
+      // Nexacro 그리드는 가상 스크롤이라 viewport 바깥의 row 는 DOM 에 없음.
+      // 클릭 대상 row 가 보이도록 스크롤 트리거 후 cell 렌더링 대기.
+      const grid = form.grdCal;
+      try {
+        if (typeof grid?.set_rowposition === 'function') grid.set_rowposition(rowIdx);
+      } catch (e) {
+        console.warn('[GLS] grdCal.set_rowposition failed', e);
+      }
+
       const prefix = popupPrefix();
       const cellSel = `div[id^="${prefix}"][id$=".grdCal.body.gridrow_${rowIdx}.cell_${rowIdx}_0"]:not([id$=":icontext"])`;
-      const cell = document.querySelector<HTMLElement>(cellSel);
-      if (!cell) throw new Error('grdCal cell not found for row ' + rowIdx);
+      let cell: HTMLElement | null = null;
+      const deadline = Date.now() + 2500;
+      while (Date.now() < deadline) {
+        cell = document.querySelector<HTMLElement>(cellSel);
+        if (cell) break;
+        await wait(120);
+      }
+      if (!cell) throw new Error('grdCal cell not found for row ' + rowIdx + ' (virtualized, scroll failed)');
       console.log('[GLS] clickSpaceRow ✓ row', rowIdx);
       nexClick(cell);
       return true;

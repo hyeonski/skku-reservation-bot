@@ -85,17 +85,56 @@ async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
 }
 
 /**
+ * 탭이 `status: 'complete'` 가 될 때까지 대기 (chrome.tabs.onUpdated 구독).
+ * background 탭이라도 정상 로딩되긴 하나, 새로 만든 직후엔 'loading' 상태고
+ * content_scripts 의 document_idle 이 아직 발화 안 됐을 수 있어 안전장치 필요.
+ */
+async function waitForTabComplete(tabId: number, timeoutMs = 15000): Promise<void> {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    if (t.status === 'complete') return;
+  } catch {
+    /* tab maybe gone */
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error(`tab ${tabId} did not reach 'complete' in ${timeoutMs}ms`));
+    }, timeoutMs);
+    const listener = (
+      updatedId: number,
+      info: chrome.tabs.TabChangeInfo,
+    ): void => {
+      if (updatedId !== tabId) return;
+      if (info.status === 'complete') {
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+/**
  * 새로 만든 (또는 막 만든) GLS 탭에서 content script 가 로드돼서
  * BG_CHECK_SESSION 에 응답할 때까지 폴링한다.
  *
- * 새 탭은 chrome.tabs.create 직후엔 content script 가 아직 inject 되지 않은 상태라
- * sendMessage 가 "Could not establish connection" 으로 즉시 throw 한다. 이걸
- * "로그인 안 됨" 으로 잘못 매핑하지 않도록, 최대 20s 동안 짧은 간격으로 재시도.
+ * 1) 먼저 chrome.tabs.onUpdated 로 탭이 complete 될 때까지 대기 — content_scripts
+ *    가 document_idle 에서 inject 되므로 그 이전에는 sendMessage 가 무조건 실패.
+ * 2) 그 후 sendMessage 폴링으로 listener 등록 시점까지 대기.
  */
 async function waitForContentReady(tabId: number, timeoutMs = 20000): Promise<ContentSessionState> {
-  const start = Date.now();
+  const startedAt = Date.now();
+  try {
+    await waitForTabComplete(tabId, Math.min(15000, timeoutMs - 2000));
+  } catch (e) {
+    // complete 신호 못 받아도 일단 polling 시도 — 실패하면 아래에서 surface.
+  }
+  const remaining = Math.max(2000, timeoutMs - (Date.now() - startedAt));
+  const deadline = Date.now() + remaining;
   let lastErr: Error | null = null;
-  while (Date.now() - start < timeoutMs) {
+  while (Date.now() < deadline) {
     try {
       const res = await sendToTab<BgCheckSession, ContentSessionState>(tabId, {
         type: 'BG_CHECK_SESSION',
