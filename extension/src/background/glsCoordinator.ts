@@ -353,6 +353,13 @@ async function searchNext(
       conflicts: result.conflicts ?? [],
     });
 
+    if (result.loginRequired) {
+      await chrome.tabs.update(state.tabId, { active: true }).catch(() => {});
+      onStatusChange({ kind: 'login_required' });
+      queues.delete(state.conversationId);
+      return;
+    }
+
     if (result.available) {
       state.lastProposed = candidate;
       onStatusChange({

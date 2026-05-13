@@ -76,7 +76,8 @@ function SearchLog({ entries }: { entries: SearchLogEntry[] }) {
             <ul className="search-log__conflicts">
               {e.conflicts.slice(0, 4).map((c, j) => (
                 <li key={j}>
-                  <span className="search-log__conflict-kind">{c.kind}</span>{' '}
+                  <span className="search-log__conflict-kind">{c.kind}</span>
+                  {c.kind && ' '}
                   {c.timeTerm && <span className="search-log__conflict-time">{c.timeTerm}</span>}{' '}
                   <span className="search-log__conflict-info">{c.info.trim()}</span>
                 </li>

@@ -136,12 +136,23 @@ chrome.runtime.onMessage.addListener(
         const message = err instanceof Error ? err.message : String(err);
         if ((msg as BackgroundToContent).type === 'BG_CHECK_AVAILABILITY') {
           const m = msg as BgCheckAvailability;
+          const loginRequired = message === 'LOGIN_REQUIRED' || !checkSession();
+          const hiddenInGrid = message.includes('not in dsGrdMainNew');
           const reply: ContentAvailabilityResult = {
             type: 'CONTENT_AVAILABILITY_RESULT',
             spaceCode: m.candidate.glsSpaceCode,
             available: false,
+            loginRequired,
             conflicts: [
-              { kind: '예약' as const, timeTerm: '', info: `error: ${message}` },
+              {
+                kind: hiddenInGrid ? ('제외' as const) : ('예약' as const),
+                timeTerm: '',
+                info: loginRequired
+                  ? '로그인이 필요합니다. GLS 탭에서 로그인한 뒤 다시 시도해주세요.'
+                  : hiddenInGrid
+                    ? 'GLS 시간표에 표시되지 않아 이번 요청에서는 제외했습니다.'
+                  : `error: ${message}`,
+              },
             ],
           };
           sendResponse(reply);

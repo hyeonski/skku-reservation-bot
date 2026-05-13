@@ -47,7 +47,16 @@ export async function openReservationModal(): Promise<void> {
   const alreadyOpen = await runInPage<boolean>('hasPopupFrame');
   if (alreadyOpen) return;
 
-  await runInPage('waitForMenuReady', { timeoutMs: 15000 });
+  try {
+    await runInPage('waitForMenuReady', { timeoutMs: 15000 });
+  } catch (e) {
+    // GLS는 같은 kingoinfo URL 내부에서 로그인 폼을 띄우는 케이스가 있다.
+    // 이 경우 menu timeout은 사실상 세션 만료이므로 명시적 sentinel로 변환.
+    if (!checkSession()) {
+      throw new Error('LOGIN_REQUIRED');
+    }
+    throw e;
+  }
   await runInPage('openReservationModal', undefined, 20000);
 }
 
@@ -112,7 +121,25 @@ export async function checkAvailability(
 
   // 공간 row 클릭 → dsGrdSub 갱신 + cboSpaceCd auto-set
   console.log('[GLS-iso] step: click space row', candidate.glsSpaceCode);
-  await runInPage('clickSpaceRow', { glsSpaceCode: candidate.glsSpaceCode });
+  try {
+    await runInPage('clickSpaceRow', { glsSpaceCode: candidate.glsSpaceCode });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes('not in dsGrdMainNew')) {
+      console.warn('[GLS-iso] space not rendered in dsGrdMainNew; treating as unavailable');
+      return {
+        available: false,
+        conflicts: [
+          {
+            kind: '제외',
+            timeTerm: '',
+            info: 'GLS 시간표에 표시되지 않아 이번 요청에서는 제외했습니다.',
+          },
+        ],
+      };
+    }
+    throw e;
+  }
   await sleep(800);
 
   // 공지 영역이 떠 있으면 닫기 (best-effort)

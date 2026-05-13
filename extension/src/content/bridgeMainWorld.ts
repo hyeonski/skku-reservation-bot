@@ -55,10 +55,16 @@ declare global {
     return null;
   }
 
-  function popupKey(): string | null {
+  function topFrame(): any | null {
     const app = window.nexacro?.getApplication?.();
-    if (!app) return null;
-    const top = app.mainframe.TopFrame;
+    const mainframe = app?.mainframe;
+    const top = mainframe?.TopFrame;
+    return top ?? null;
+  }
+
+  function popupKey(): string | null {
+    const top = topFrame();
+    if (!top) return null;
     const keys = Object.keys(top).filter((k) => k.startsWith('popupFrame'));
     return keys.length > 0 ? keys[keys.length - 1] : null;
   }
@@ -72,7 +78,9 @@ declare global {
   function activePopupForm(): any {
     const k = popupKey();
     if (!k) throw new Error('no popupFrame open');
-    return window.nexacro.getApplication().mainframe.TopFrame[k].form;
+    const top = topFrame();
+    if (!top) throw new Error('TopFrame not ready');
+    return top[k].form;
   }
 
   function activeModalDM(): any {
@@ -109,7 +117,7 @@ declare global {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         try {
-          if (window.nexacro?.getApplication?.()) {
+          if (topFrame()) {
             const menu = byIdSuffix('btnM532010000');
             if (menu && menu.offsetParent !== null) return true;
           }

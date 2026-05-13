@@ -125,7 +125,8 @@ export interface ContentAvailabilityResult {
   type: 'CONTENT_AVAILABILITY_RESULT';
   spaceCode: string;
   available: boolean;
-  conflicts?: Array<{ kind: '수업' | '예약' | '대여'; timeTerm: string; info: string }>;
+  loginRequired?: boolean;
+  conflicts?: Array<{ kind: '수업' | '예약' | '대여' | '제외'; timeTerm: string; info: string }>;
 }
 
 export interface ContentSubmitResult {
