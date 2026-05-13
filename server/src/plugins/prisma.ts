@@ -6,6 +6,7 @@
  */
 
 import type { FastifyInstance } from 'fastify';
+import fp from 'fastify-plugin';
 import { PrismaClient } from '@prisma/client';
 
 declare module 'fastify' {
@@ -14,7 +15,9 @@ declare module 'fastify' {
   }
 }
 
-export async function prismaPlugin(app: FastifyInstance): Promise<void> {
+// fastify-plugin 으로 감싸야 decorate('prisma', ...) 가 부모 app 컨텍스트로 전파된다.
+// 미적용 시 sibling 라우트들이 app.prisma 를 못 봐서 "undefined.space" 에러 발생.
+export const prismaPlugin = fp(async function prismaPlugin(app: FastifyInstance) {
   const prisma = new PrismaClient();
   await prisma.$connect();
 
@@ -23,4 +26,4 @@ export async function prismaPlugin(app: FastifyInstance): Promise<void> {
   app.addHook('onClose', async (instance) => {
     await instance.prisma.$disconnect();
   });
-}
+});

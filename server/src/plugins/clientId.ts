@@ -10,6 +10,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import fp from 'fastify-plugin';
 import { z } from 'zod';
 
 declare module 'fastify' {
@@ -22,7 +23,7 @@ const uuidV4Schema = z.string().uuid();
 
 const SKIP_PATHS = new Set<string>(['/health']);
 
-export async function clientIdPlugin(app: FastifyInstance): Promise<void> {
+export const clientIdPlugin = fp(async function clientIdPlugin(app: FastifyInstance) {
   // 기본값 데코레이트 — 모든 요청에서 안전하게 접근 가능하도록.
   app.decorateRequest('clientId', '');
 
@@ -57,4 +58,4 @@ export async function clientIdPlugin(app: FastifyInstance): Promise<void> {
 
     req.clientId = id;
   });
-}
+});
