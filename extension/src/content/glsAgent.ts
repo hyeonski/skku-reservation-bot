@@ -22,11 +22,31 @@ import { fillForm } from './formFiller';
 
 // ---------- 세션 ----------
 
+/**
+ * 세션 유효 여부 판정.
+ *
+ * GLS는 ticket이 만료되었을 때 `login.skku.edu`로 redirect되는 경우와
+ * **같은 URL(`kingoinfo.skku.edu`)에서 Nexacro 내부 로그인 폼을 띄우는 경우**
+ * 두 가지가 있다 (검증 2026-05-13). 따라서 URL만 보면 후자를 놓친다.
+ *
+ * 시그널을 셋 결합:
+ *   1. URL이 login.skku.edu 면 false
+ *   2. URL이 kingoinfo.skku.edu 가 아니면 false
+ *   3. 페이지에 로그인 폼(`edtLOGIN_ID`)이 가시 상태로 떠있으면 false
+ *      (또는 로그인 후에만 나타나는 메뉴 `btnM532010000` 이 없으면 false)
+ */
 export function checkSession(): boolean {
-  // 1) 로그인 페이지로 리다이렉트된 경우 false
   if (location.href.startsWith(LOGIN_URL_PREFIX)) return false;
-  // 2) GLS 도메인이 아니면 (이 content script는 kingoinfo 매치이긴 함) false
   if (!location.href.startsWith(GLS_HOME_URL)) return false;
+
+  // 로그인 폼이 가시면 미로그인.
+  const loginId = document.querySelector<HTMLElement>(
+    '[id$=".edtLOGIN_ID"]:not([id$=":icontext"])',
+  );
+  if (loginId && loginId.offsetParent !== null) return false;
+
+  // 메뉴(btnM532010000)가 보이면 로그인됨. Nexacro 로딩 중이라 아직 안 보일 수도
+  // 있으니, 로그인 폼 없음 + 메뉴 없음의 경우는 일단 true (호출자가 timeout 처리).
   return true;
 }
 
@@ -103,10 +123,14 @@ export async function checkAvailability(
     var wait = G.wait;
     var dm = G.activeModalDM();
 
-    // 캠퍼스 / 건물: cascade 트리거 필요 → DOM 클릭 (selectComboByText)
-    G.selectComboByText(dm, 'cboCampusCd', ${JSON.stringify(candidate.campusName)});
+    // 캠퍼스 / 건물: cascade 트리거 필요 → DOM 클릭 (selectComboByText). async polling이라 await.
+    await G.selectComboByText(dm, 'cboCampusCd', ${JSON.stringify(candidate.campusName)});
     await wait(700);
-    G.selectComboByText(dm, 'cboBuildCd', ${JSON.stringify(candidate.buildingName)});
+    // 캠퍼스 변경은 calUseDt를 reset하므로 cboBuildCd OnChanged 가 dsCboSpace 를
+    // 로드하려면 날짜를 다시 채워둬야 한다 (시딩 스크립트와 동일 패턴).
+    dm.calUseDt.set_value(${JSON.stringify(yyyymmdd)});
+    await wait(200);
+    await G.selectComboByText(dm, 'cboBuildCd', ${JSON.stringify(candidate.buildingName)});
     await wait(1500); // dsCboSpace + dsGrdMainNew 로드 대기
 
     // 날짜 set

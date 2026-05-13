@@ -86,12 +86,19 @@ export function activeModalDM(): any {
  * 콤보박스를 텍스트 라벨로 선택. cascade(onItemChanged) 발화에 필요.
  * 내부적으로 dropbutton 클릭 → combolist.item_N 텍스트 매칭 후 클릭.
  *
- * 주의: Nexacro 컴포넌트의 `.id`는 short name(예: `"cboCampusCd"`)만 노출되고
- * 풀패스가 아니라서 `document.getElementById(combo.id + '.dropbutton')`는 항상 null.
- * 또한 같은 suffix가 페이지 본체 `divSearch`와 모달 `divManage` 양쪽에 존재하므로,
- * **현재 popupFrame prefix로 좁힌 suffix 매칭**을 사용해야 모달 안의 콤보만 안전하게 잡힌다.
+ * 주의 1: Nexacro 컴포넌트의 `.id`는 short name(예: `"cboCampusCd"`)만 노출되고
+ *   풀패스가 아니라서 `document.getElementById(combo.id + '.dropbutton')`는 항상 null.
+ * 주의 2: 같은 suffix가 페이지 본체 `divSearch`와 모달 `divManage` 양쪽에 존재하므로,
+ *   현재 popupFrame prefix로 좁힌 suffix 매칭으로 모달 안의 콤보만 잡는다.
+ * 주의 3: Nexacro는 dropdown이 열린 직후 item text를 lazy render한다 (cold cache 시
+ *   첫 열림에서 500ms로 부족할 수 있음). 따라서 async 폴링으로 매칭 item이 나타날 때까지
+ *   최대 3s 대기.
  */
-export function selectComboByText(dm: any, comboSuffix: string, label: string): void {
+export async function selectComboByText(
+  dm: any,
+  comboSuffix: string,
+  label: string,
+): Promise<void> {
   const combo = dm[comboSuffix];
   if (!combo) throw new Error(`combo not found: ${comboSuffix}`);
 
@@ -107,12 +114,20 @@ export function selectComboByText(dm: any, comboSuffix: string, label: string): 
   nexClick(drop);
 
   const itemSel = `div[id^="${popupPrefix}"][id*=".${comboSuffix}.combolist.item_"]`;
-  const items = Array.from(document.querySelectorAll<HTMLElement>(itemSel)).filter(
-    (d) => !d.id.endsWith(':text'),
-  );
-  const target = items.find((it) => it.innerText.trim() === label);
+  const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const deadline = Date.now() + 3000;
+  let target: HTMLElement | null = null;
+  let lastSnapshot: HTMLElement[] = [];
+  while (Date.now() < deadline) {
+    lastSnapshot = Array.from(document.querySelectorAll<HTMLElement>(itemSel)).filter(
+      (d) => !d.id.endsWith(':text'),
+    );
+    target = lastSnapshot.find((it) => it.innerText.trim() === label) ?? null;
+    if (target) break;
+    await wait(150);
+  }
   if (!target) {
-    const available = items.map((i) => i.innerText.trim()).join(', ');
+    const available = lastSnapshot.map((i) => i.innerText.trim()).join(', ');
     throw new Error(`combo ${comboSuffix} option not found: "${label}". Available: ${available}`);
   }
   nexClick(target);
@@ -183,19 +198,22 @@ export function dismissNoticeIfShown(): void {
 
 /**
  * 모달의 공간 시간표 row를 클릭하여 dsGrdSub를 로드한다.
- * 클릭 후 dsGrdSub에 해당 공간의 점유 일정이 채워짐.
+ * 클릭 후 cboSpaceCd가 자동 set되고, edtUseNum이 최대 정원으로 채워지며,
+ * dsGrdSub에 해당 공간의 일주일치 점유 일정이 채워진다 (검증 2026-05-13).
  *
- * 1차 시도: Nexacro grdCal.selectRow + cell click handler 호출
- * 2차 시도: 좌표 기반 클릭 (PoC에서 검증된 방식)
+ * 클릭 대상: `grdCal.body.gridrow_${rowIdx}.cell_${rowIdx}_0` DOM 요소.
+ * Nexacro 의 grdCal.selectRow + grdCal_OnCellClick 직접 호출은 side-effect를
+ * 트리거하지 않아 (검증 완료) **반드시 실제 cell DOM에 마우스 이벤트 시퀀스 dispatch**.
  *
- * TODO: 슬라이스 9에서 실제 환경에서 더 견고한 방법 검증·보강.
+ * 또한 `grdCal` 컴포넌트의 `.id` 가 short name (`"grdCal"`) 만 노출되어
+ * `getElementById(grd.id + '.body')` 가 항상 null. popup-prefix suffix 매칭으로 찾는다.
  */
 export function clickSpaceRow(glsSpaceCode: string): void {
   const form = activePopupForm();
   const ds = form.dsGrdMainNew;
   let rowIdx = -1;
   for (let i = 0; i < ds.getRowCount(); i++) {
-    if (ds.getColumn(i, 'GU_SPACE_CD') === glsSpaceCode) {
+    if (String(ds.getColumn(i, 'GU_SPACE_CD')) === String(glsSpaceCode)) {
       rowIdx = i;
       break;
     }
@@ -204,17 +222,17 @@ export function clickSpaceRow(glsSpaceCode: string): void {
     throw new Error(`space ${glsSpaceCode} not in dsGrdMainNew — re-trigger building cascade?`);
   }
 
-  const grdCal = form.grdCal;
-  if (grdCal && typeof grdCal.selectRow === 'function') {
-    grdCal.selectRow(rowIdx);
-    // grdCal_OnCellClick 핸들러는 보통 user event라 직접 호출은 어색하지만, 일부 환경에선 작동
-    try {
-      form.grdCal_OnCellClick?.(grdCal, { row: rowIdx, cell: 0 });
-    } catch {
-      /* ignore — fallback below */
-    }
+  const top = nexacro.getApplication().mainframe.TopFrame;
+  const popupKeys = Object.keys(top).filter((k) => k.startsWith('popupFrame'));
+  if (popupKeys.length === 0) throw new Error('no popupFrame open');
+  const popupPrefix = `mainframe.TopFrame.${popupKeys[popupKeys.length - 1]}.`;
+
+  const cellSel = `div[id^="${popupPrefix}"][id$=".grdCal.body.gridrow_${rowIdx}.cell_${rowIdx}_0"]:not([id$=":icontext"])`;
+  const cell = document.querySelector<HTMLElement>(cellSel);
+  if (!cell) {
+    throw new Error(`grdCal cell not found for row ${rowIdx}: ${cellSel}`);
   }
-  // 좌표 폴백은 슬라이스 9에서 grdCal DOM 구조 확인 후 보강
+  nexClick(cell);
 }
 
 /**

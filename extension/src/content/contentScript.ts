@@ -93,10 +93,12 @@ const BRIDGE_SOURCE = String.raw`
     } catch (_) { return false; }
   };
 
-  G.selectComboByText = function (dm, comboSuffix, label) {
+  G.selectComboByText = async function (dm, comboSuffix, label) {
     // Nexacro 컴포넌트의 .id는 short name만 줘서 풀패스 매칭 불가.
     // 같은 suffix가 divSearch(페이지)와 divManage(모달) 양쪽에 있으므로
     // 현재 popupFrame prefix로 좁힌 suffix 매칭으로 모달 콤보만 잡는다.
+    // 또한 Nexacro는 dropdown이 열린 직후 item text를 lazy render하므로
+    // 매칭 item이 나타날 때까지 최대 3s 폴링.
     var combo = dm[comboSuffix];
     if (!combo) throw new Error('combo not found: ' + comboSuffix);
     var app = window.nexacro.getApplication();
@@ -111,15 +113,21 @@ const BRIDGE_SOURCE = String.raw`
     G.nexClick(drop);
 
     var itemSel = 'div[id^="' + popupPrefix + '"][id*=".' + comboSuffix + '.combolist.item_"]';
-    var items = Array.prototype.slice
-      .call(document.querySelectorAll(itemSel))
-      .filter(function (d) { return !d.id.endsWith(':text'); });
+    var deadline = Date.now() + 3000;
     var target = null;
-    for (var i = 0; i < items.length; i++) {
-      if (items[i].innerText.trim() === label) { target = items[i]; break; }
+    var lastSnapshot = [];
+    while (Date.now() < deadline) {
+      lastSnapshot = Array.prototype.slice
+        .call(document.querySelectorAll(itemSel))
+        .filter(function (d) { return !d.id.endsWith(':text'); });
+      for (var i = 0; i < lastSnapshot.length; i++) {
+        if (lastSnapshot[i].innerText.trim() === label) { target = lastSnapshot[i]; break; }
+      }
+      if (target) break;
+      await G.wait(150);
     }
     if (!target) {
-      var avail = items.map(function (i) { return i.innerText.trim(); }).join(', ');
+      var avail = lastSnapshot.map(function (i) { return i.innerText.trim(); }).join(', ');
       throw new Error('combo ' + comboSuffix + ' option not found: "' + label + '". Available: ' + avail);
     }
     G.nexClick(target);
@@ -158,6 +166,8 @@ const BRIDGE_SOURCE = String.raw`
   };
 
   G.clickSpaceRow = function (glsSpaceCode) {
+    // grdCal.selectRow + grdCal_OnCellClick 직접 호출은 side-effect (cboSpaceCd auto-set,
+    // dsGrdSub 로드, 공지 영역 갱신) 를 트리거하지 않음 — 반드시 실제 cell DOM 에 마우스 이벤트 dispatch.
     var form = G.activePopupForm();
     var ds = form.dsGrdMainNew;
     var rowIdx = -1;
@@ -165,24 +175,17 @@ const BRIDGE_SOURCE = String.raw`
       if (String(ds.getColumn(i, 'GU_SPACE_CD')) === String(glsSpaceCode)) { rowIdx = i; break; }
     }
     if (rowIdx === -1) throw new Error('space ' + glsSpaceCode + ' not in dsGrdMainNew');
-    var grd = form.grdCal;
-    if (grd && typeof grd.selectRow === 'function') {
-      grd.selectRow(rowIdx);
-      try { if (typeof form.grdCal_OnCellClick === 'function') form.grdCal_OnCellClick(grd, { row: rowIdx, cell: 0 }); } catch (_) {}
-    }
-    // 좌표 기반 폴백 — grdCal DOM의 가시 row 영역을 클릭
-    try {
-      var body = document.getElementById(grd.id + '.body');
-      if (body) {
-        var rect = body.getBoundingClientRect();
-        // row 높이를 추정 (rowCount > 0 가정) — 1행 클릭이면 dsGrdSub 갱신
-        var rowH = rect.height / Math.max(1, ds.getRowCount());
-        var x = rect.left + 30;
-        var y = rect.top + rowH * rowIdx + rowH / 2;
-        var el = document.elementFromPoint(x, y);
-        if (el) G.nexClick(el);
-      }
-    } catch (_) { /* 좌표 클릭 실패 시 selectRow만으로 진행 */ }
+
+    var app = window.nexacro.getApplication();
+    var top = app.mainframe.TopFrame;
+    var popupKeys = Object.keys(top).filter(function (k) { return k.indexOf('popupFrame') === 0; });
+    if (popupKeys.length === 0) throw new Error('no popupFrame open');
+    var popupPrefix = 'mainframe.TopFrame.' + popupKeys[popupKeys.length - 1] + '.';
+
+    var cellSel = 'div[id^="' + popupPrefix + '"][id$=".grdCal.body.gridrow_' + rowIdx + '.cell_' + rowIdx + '_0"]:not([id$=":icontext"])';
+    var cell = document.querySelector(cellSel);
+    if (!cell) throw new Error('grdCal cell not found for row ' + rowIdx);
+    G.nexClick(cell);
   };
 
   G.setFormValues = function (dm, values) {
