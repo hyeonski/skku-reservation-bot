@@ -153,10 +153,15 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       return true;
 
     case 'POPUP_GET_STATUS': {
+      // popup 재오픈 시 호출. BG 가 들고 있는 대화 컨텍스트 + 자동화 큐 상태를
+      // 반환해서 popup 이 history / 진행 상태 / 미확정 후보 카드 까지 복원할 수 있도록.
       const ctx = contexts.get(msg.conversationId);
+      const queue = gls.getQueue(msg.conversationId);
       sendResponse({
         status: ctx?.lastStatus ?? { kind: 'idle' },
         lastFilledSlots: ctx?.lastFilledSlots ?? null,
+        history: ctx?.history ?? [],
+        lastProposed: queue?.lastProposed ?? null,
       });
       return false;
     }

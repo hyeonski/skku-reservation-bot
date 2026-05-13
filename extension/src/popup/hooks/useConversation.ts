@@ -9,7 +9,7 @@
  * - confirm/cancel 액션
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import type { ChatMessage, AutomationStatus, SpaceCandidate } from '../../shared/types';
 import type {
@@ -65,8 +65,29 @@ function sendToBackground<TResp = unknown>(msg: PopupToBackground): Promise<TRes
   });
 }
 
+const CONVERSATION_ID_KEY = 'gls_conversation_id_v1';
+
+async function loadOrCreateConversationId(): Promise<string> {
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const got = await chrome.storage.local.get(CONVERSATION_ID_KEY);
+      const existing = got?.[CONVERSATION_ID_KEY];
+      if (typeof existing === 'string' && existing.length > 0) return existing;
+    }
+  } catch {
+    /* storage unavailable — fall through to fresh */
+  }
+  const fresh = uuidv4();
+  try {
+    await chrome.storage?.local?.set({ [CONVERSATION_ID_KEY]: fresh });
+  } catch {
+    /* non-fatal */
+  }
+  return fresh;
+}
+
 export function useConversation(): UseConversationResult {
-  const conversationId = useMemo(() => uuidv4(), []);
+  const [conversationId, setConversationId] = useState<string>('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<AutomationStatus>({ kind: 'idle' });
   const [candidate, setCandidate] = useState<SpaceCandidate | null>(null);
@@ -77,6 +98,47 @@ export function useConversation(): UseConversationResult {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  // Mount: 영구 저장된 conversationId 복원 (없으면 새로 발급).
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const id = await loadOrCreateConversationId();
+      if (!cancelled) setConversationId(id);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // conversationId 결정 직후: BG 에서 history / status / lastProposed 복원.
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const resp = (await sendToBackground({
+          type: 'POPUP_GET_STATUS',
+          conversationId,
+        })) as
+          | {
+              status: AutomationStatus;
+              history: ChatMessage[];
+              lastProposed: SpaceCandidate | null;
+            }
+          | undefined;
+        if (cancelled || !resp) return;
+        if (resp.history?.length) setMessages(resp.history);
+        if (resp.status) setStatus(resp.status);
+        if (resp.lastProposed) setCandidate(resp.lastProposed);
+      } catch {
+        /* 첫 진입이거나 BG context 없음 — 빈 상태 그대로 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
 
   const appendAssistant = useCallback((content: string) => {
     setMessages((prev) => [...prev, { role: 'assistant', content }]);
@@ -242,6 +304,21 @@ export function useConversation(): UseConversationResult {
     setMessages([]);
     setCandidate(null);
     setStatus({ kind: 'idle' });
+    // 영속 저장된 conversationId 도 제거하고 새 ID 발급. 다음 popup 진입은 깨끗한 대화로 시작.
+    void (async () => {
+      try {
+        await chrome.storage?.local?.remove(CONVERSATION_ID_KEY);
+      } catch {
+        /* ignore */
+      }
+      const fresh = uuidv4();
+      try {
+        await chrome.storage?.local?.set({ [CONVERSATION_ID_KEY]: fresh });
+      } catch {
+        /* ignore */
+      }
+      setConversationId(fresh);
+    })();
   }, [conversationId]);
 
   // no_candidate 상태가 되면 1회 안내 메시지
