@@ -126,17 +126,28 @@ declare global {
      * 이미 모달이 떠 있으면 noop.
      */
     openReservationModal: async (): Promise<true> => {
-      if (popupKey()) return true;
+      if (popupKey()) { console.log('[GLS] modal already open'); return true; }
 
       // 1. 상단 메뉴
       const menu = byIdSuffix('btnM532010000');
       if (!menu) throw new Error('menu btnM532010000 not found');
+      console.log('[GLS] clicking top menu (신청/자격관리)');
       nexClick(menu);
-      await wait(500);
+      await wait(700);
 
-      // 2. 서브메뉴 (텍스트 매칭이 가장 안전)
-      const sub = findByText('공간대여신청');
-      if (!sub) throw new Error('submenu "공간대여신청" not found');
+      // 2. 서브메뉴 — id suffix 가 텍스트 매칭보다 안정적
+      let sub: HTMLElement | null = null;
+      for (let i = 0; i < 15; i++) {
+        sub = byIdSuffix('btnMenuM000011122');
+        if (sub && sub.offsetParent !== null) break;
+        await wait(200);
+      }
+      if (!sub) {
+        // fallback: 텍스트 매칭
+        sub = findByText('공간대여신청');
+      }
+      if (!sub) throw new Error('submenu (공간대여신청) not found');
+      console.log('[GLS] clicking submenu', sub.id);
       nexClick(sub);
       await wait(1500);
 
@@ -148,11 +159,12 @@ declare global {
         await wait(200);
       }
       if (!btn) throw new Error('btnInsert4 not visible');
+      console.log('[GLS] clicking btnInsert4');
       nexClick(btn);
 
       // 4. popupFrame 등장 대기 (최대 5s)
       for (let i = 0; i < 25; i++) {
-        if (popupKey()) return true;
+        if (popupKey()) { console.log('[GLS] modal popupFrame ready'); return true; }
         await wait(200);
       }
       throw new Error('reservation modal did not open');
@@ -166,6 +178,7 @@ declare global {
       args: { suffix: string; label: string },
     ): Promise<true> => {
       const { suffix, label } = args;
+      console.log('[GLS] selectComboByText', suffix, '←', label);
       const prefix = popupPrefix();
       const dropSel = `div[id^="${prefix}"][id$=".${suffix}.dropbutton"]:not([id$=":icontext"])`;
       const drop = document.querySelector<HTMLElement>(dropSel);
@@ -188,6 +201,7 @@ declare global {
         const avail = snap.map((i) => i.innerText.trim()).join(', ');
         throw new Error(`combo ${suffix} option not found: "${label}". Available: ${avail}`);
       }
+      console.log('[GLS] selectComboByText ✓', suffix, '=', label);
       nexClick(target);
       return true;
     },
@@ -219,6 +233,7 @@ declare global {
     clickSpaceRow: (args: { glsSpaceCode: string }): true => {
       const form = activePopupForm();
       const ds = form.dsGrdMainNew;
+      console.log('[GLS] clickSpaceRow', args.glsSpaceCode, 'dsGrdMainNew rows:', ds.getRowCount());
       let rowIdx = -1;
       for (let i = 0; i < ds.getRowCount(); i++) {
         if (String(ds.getColumn(i, 'GU_SPACE_CD')) === String(args.glsSpaceCode)) {
@@ -227,12 +242,15 @@ declare global {
         }
       }
       if (rowIdx === -1) {
-        throw new Error('space ' + args.glsSpaceCode + ' not in dsGrdMainNew');
+        const avail: string[] = [];
+        for (let i = 0; i < ds.getRowCount(); i++) avail.push(String(ds.getColumn(i, 'GU_SPACE_CD')));
+        throw new Error(`space ${args.glsSpaceCode} not in dsGrdMainNew. Available: [${avail.join(',')}]`);
       }
       const prefix = popupPrefix();
       const cellSel = `div[id^="${prefix}"][id$=".grdCal.body.gridrow_${rowIdx}.cell_${rowIdx}_0"]:not([id$=":icontext"])`;
       const cell = document.querySelector<HTMLElement>(cellSel);
       if (!cell) throw new Error('grdCal cell not found for row ' + rowIdx);
+      console.log('[GLS] clickSpaceRow ✓ row', rowIdx);
       nexClick(cell);
       return true;
     },
@@ -336,6 +354,7 @@ declare global {
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        console.warn('[GLS] op failed:', op, message);
         window.postMessage(
           { type: 'GLS_AGENT_RESULT', id, ok: false, error: message },
           '*',

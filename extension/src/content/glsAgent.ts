@@ -64,17 +64,21 @@ export async function checkAvailability(
   available: boolean;
   conflicts: Array<{ kind: string; timeTerm: string; info: string }>;
 }> {
+  console.log('[GLS-iso] checkAvailability start', candidate.glsSpaceCode, date, startHour, endHour);
   await openReservationModal();
   const yyyymmdd = toYyyymmdd(date);
 
   // 캠퍼스 변경 → calUseDt reset → 미리 채워둬야 cboBuildCd cascade 가 dsCboSpace 를 로드함.
+  console.log('[GLS-iso] step: select campus', candidate.campusName);
   await runInPage('selectComboByText', {
     suffix: 'cboCampusCd',
     label: candidate.campusName,
   });
   await sleep(700);
+  console.log('[GLS-iso] step: prime calUseDt', yyyymmdd);
   await runInPage('setComponentValue', { suffix: 'calUseDt', value: yyyymmdd });
   await sleep(200);
+  console.log('[GLS-iso] step: select building', candidate.buildingName);
   await runInPage('selectComboByText', {
     suffix: 'cboBuildCd',
     label: candidate.buildingName,
@@ -82,15 +86,18 @@ export async function checkAvailability(
   await sleep(1500);
 
   // 공간 row 클릭 → dsGrdSub 갱신 + cboSpaceCd auto-set
+  console.log('[GLS-iso] step: click space row', candidate.glsSpaceCode);
   await runInPage('clickSpaceRow', { glsSpaceCode: candidate.glsSpaceCode });
   await sleep(800);
 
-  // 공지 영역이 떠 있으면 닫기 (best-effort, inline 영역이라 인터랙션 안 막아도 됨)
+  // 공지 영역이 떠 있으면 닫기 (best-effort)
   await runInPage('dismissNoticeIfShown');
   await sleep(150);
 
+  console.log('[GLS-iso] step: read dsGrdSub');
   const schedule = await runInPage<SpaceScheduleRow[]>('readDsGrdSub');
   const conflicts = computeConflicts(schedule, yyyymmdd, startHour, endHour);
+  console.log('[GLS-iso] checkAvailability done — conflicts:', conflicts.length);
 
   return { available: conflicts.length === 0, conflicts };
 }
