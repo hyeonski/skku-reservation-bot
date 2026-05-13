@@ -34,6 +34,17 @@ export interface PopupCancel {
 }
 
 /**
+ * Dev-only: 채팅/LLM 우회 + /spaces 서버 조회만 BG 가 대행.
+ * popup 의 DevPanel 1단계 (슬롯 + 필터 입력 → 후보 리스트 조회).
+ */
+export interface PopupDevListSpaces {
+  type: 'POPUP_DEV_LIST_SPACES';
+  headcount: number;
+  campusCode?: string;
+  buildingNo?: string;
+}
+
+/**
  * Dev-only: 채팅/LLM/서버 전부 우회하고 자동화만 직접 트리거.
  * slots·candidates·formData를 popup의 dev panel에서 수기 입력한 값으로 받음.
  */
@@ -143,6 +154,7 @@ export type PopupToBackground =
   | PopupConfirmReservation
   | PopupCancel
   | PopupGetStatus
+  | PopupDevListSpaces
   | PopupDevRunAutomation;
 
 export type BackgroundToPopup =

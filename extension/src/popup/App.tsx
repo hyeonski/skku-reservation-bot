@@ -96,6 +96,7 @@ export function App() {
     sendMessage,
     confirmReservation,
     cancel,
+    listDevSpaces,
     runDevAutomation,
   } = useConversation();
   const [mode, setMode] = useState<'chat' | 'dev'>('chat');
@@ -159,7 +160,11 @@ export function App() {
           <ChatHistory messages={messages} footer={footer} />
         ) : (
           <>
-            <DevPanel busy={busy} onRun={runDevAutomation} />
+            <DevPanel
+              busy={busy}
+              onListSpaces={listDevSpaces}
+              onRun={runDevAutomation}
+            />
             {/* dev 모드에서도 후보 카드 / 로그인 안내는 동일하게 사용 */}
             <div className="dev-panel__footer">{footer}</div>
           </>

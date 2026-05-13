@@ -360,3 +360,79 @@ body {
 .dev-panel__footer {
   padding: 0 12px 12px;
 }
+.dev-panel__error {
+  background: #ffebe9;
+  color: var(--color-error);
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.dev-panel select {
+  font: inherit;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: #fff;
+  color: #1f2328;
+}
+
+/* Dev list view */
+.dev-panel__list-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--color-muted);
+}
+.dev-panel__list-count {
+  flex: 1;
+  text-align: right;
+}
+.dev-panel__empty {
+  padding: 16px 8px;
+  text-align: center;
+  color: var(--color-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.dev-panel__candidates {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.dev-panel__candidate {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.dev-panel__candidate-main {
+  flex: 1;
+  min-width: 0;
+}
+.dev-panel__candidate-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #1f2328;
+}
+.dev-panel__candidate-code {
+  font-size: 11px;
+  color: var(--color-muted);
+  font-weight: 400;
+}
+.dev-panel__candidate-meta {
+  font-size: 11px;
+  color: var(--color-muted);
+  margin-top: 2px;
+}
+.dev-panel__candidate-org {
+  font-size: 11px;
+  color: var(--color-warn);
+  margin-top: 2px;
+}

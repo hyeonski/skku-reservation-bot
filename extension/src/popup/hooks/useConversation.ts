@@ -28,6 +28,12 @@ export interface UseConversationResult {
   sendMessage: (text: string) => Promise<void>;
   confirmReservation: (confirmed: boolean) => Promise<void>;
   cancel: () => void;
+  /** Dev: 슬롯/필터 조건으로 서버에서 후보 공간 리스트 받기. */
+  listDevSpaces: (args: {
+    headcount: number;
+    campusCode?: string;
+    buildingNo?: string;
+  }) => Promise<SpaceCandidate[]>;
   /** Dev: 채팅·LLM·서버 우회하고 자동화만 직접 트리거. */
   runDevAutomation: (args: {
     slots: import('../../shared/types').FilledSlots;
@@ -183,6 +189,25 @@ export function useConversation(): UseConversationResult {
     [candidate, conversationId, appendAssistant],
   );
 
+  const listDevSpaces = useCallback(
+    async (args: {
+      headcount: number;
+      campusCode?: string;
+      buildingNo?: string;
+    }): Promise<SpaceCandidate[]> => {
+      const resp = (await sendToBackground({
+        type: 'POPUP_DEV_LIST_SPACES',
+        headcount: args.headcount,
+        ...(args.campusCode ? { campusCode: args.campusCode } : {}),
+        ...(args.buildingNo ? { buildingNo: args.buildingNo } : {}),
+      })) as { ok: boolean; candidates?: SpaceCandidate[]; error?: string } | undefined;
+      if (!resp) return [];
+      if (!resp.ok) throw new Error(resp.error ?? 'listSpaces failed');
+      return resp.candidates ?? [];
+    },
+    [],
+  );
+
   const runDevAutomation = useCallback(
     async (args: {
       slots: import('../../shared/types').FilledSlots;
@@ -239,6 +264,7 @@ export function useConversation(): UseConversationResult {
     sendMessage,
     confirmReservation,
     cancel,
+    listDevSpaces,
     runDevAutomation,
   };
 }

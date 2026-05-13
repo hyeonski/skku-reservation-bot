@@ -161,6 +161,17 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       return false;
     }
 
+    case 'POPUP_DEV_LIST_SPACES':
+      apiClient
+        .listSpaces({
+          headcount: msg.headcount,
+          ...(msg.campusCode ? { campusCode: msg.campusCode } : {}),
+          ...(msg.buildingNo ? { buildingNo: msg.buildingNo } : {}),
+        })
+        .then((candidates) => sendResponse({ ok: true, candidates }))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
     case 'POPUP_DEV_RUN_AUTOMATION':
       handleDevRunAutomation(msg)
         .then(() => sendResponse({ ok: true }))

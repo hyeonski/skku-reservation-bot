@@ -1,31 +1,33 @@
 /**
- * Dev 전용 패널 — 채팅·LLM·서버를 모두 우회하고 자동화 스크립트만 트리거.
+ * Dev 전용 패널 — 채팅·LLM 우회하고 자동화 스크립트만 검증.
  *
- * 사용 흐름:
- *   1. slots(date/time/headcount) + candidate 1개 + formData 를 직접 입력
- *   2. "자동화 시작" → background SW가 runReservationFlow 를 candidates 주입한 채 실행
- *   3. 검증된 후 BG가 BG_CANDIDATE_PROPOSAL 푸시 → 상위 popup 의 CandidateCard 에서 confirm
+ * 2단계 UX:
+ *   1) 슬롯(날짜/시간/인원) + 선택 필터(캠퍼스/건물) + 신청서 입력 → "공간 조회"
+ *      → 서버 /spaces 호출 (BG 가 대행) → 후보 공간 리스트 화면으로 전환
+ *   2) 후보 공간 리스트에서 하나 선택 → POPUP_DEV_RUN_AUTOMATION 으로 자동화 트리거
+ *      ("← 조건 수정" 으로 1단계 복귀 가능)
  *
- * 의도적으로 단일 후보만 입력 가능. 여러 후보 순회 테스트는 후속 (textarea JSON paste 등)으로.
+ * 후보 공간 form 을 직접 입력하지 않고 DB 에서 받아 골라야 더 실제 production 흐름에
+ * 가깝다 — 자동화 + 서버 /spaces 통합 검증 동시에 됨.
  */
 
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { FilledSlots, SpaceCandidate } from '../../shared/types';
 import type { ReservationFormData } from '../../shared/messages';
 
-const DEFAULTS = {
+const SLOT_DEFAULTS = {
   date: '',
   startTime: '18:00',
   endTime: '20:00',
   headcount: 20,
-  campusCode: '1',
-  campusName: '인문사회과학캠퍼스',
-  buildingNo: '161',
-  buildingName: '수선관',
-  glsSpaceCode: '61605',
-  roomName: 'e+강의실(70명)',
-  capacityMin: 10,
-  capacityMax: 70,
+};
+
+const FILTER_DEFAULTS = {
+  campusCode: '', // '' | '1' | '2'
+  buildingNo: '',
+};
+
+const FORM_DEFAULTS = {
   hangsaGbCode: '111',
   organization: '소프트웨어학과 학생회',
   eventName: '자동화 테스트 회의',
@@ -34,6 +36,11 @@ const DEFAULTS = {
 
 export interface DevPanelProps {
   busy: boolean;
+  onListSpaces: (args: {
+    headcount: number;
+    campusCode?: string;
+    buildingNo?: string;
+  }) => Promise<SpaceCandidate[]>;
   onRun: (args: {
     slots: FilledSlots;
     candidates: SpaceCandidate[];
@@ -41,222 +48,247 @@ export interface DevPanelProps {
   }) => Promise<void>;
 }
 
-export function DevPanel({ busy, onRun }: DevPanelProps) {
-  const [v, setV] = useState({ ...DEFAULTS });
+type Step = 'form' | 'list';
 
-  function set<K extends keyof typeof DEFAULTS>(k: K, val: (typeof DEFAULTS)[K]) {
-    setV((prev) => ({ ...prev, [k]: val }));
+export function DevPanel({ busy, onListSpaces, onRun }: DevPanelProps) {
+  const [step, setStep] = useState<Step>('form');
+  const [slots, setSlots] = useState({ ...SLOT_DEFAULTS });
+  const [filters, setFilters] = useState({ ...FILTER_DEFAULTS });
+  const [form, setForm] = useState({ ...FORM_DEFAULTS });
+  const [candidates, setCandidates] = useState<SpaceCandidate[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const setSlot = <K extends keyof typeof SLOT_DEFAULTS>(k: K, v: (typeof SLOT_DEFAULTS)[K]) =>
+    setSlots((p) => ({ ...p, [k]: v }));
+  const setFilter = <K extends keyof typeof FILTER_DEFAULTS>(k: K, v: string) =>
+    setFilters((p) => ({ ...p, [k]: v }));
+  const setF = <K extends keyof typeof FORM_DEFAULTS>(k: K, v: string) =>
+    setForm((p) => ({ ...p, [k]: v }));
+
+  const fetchCandidates = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (loading || busy) return;
+      if (!slots.date || !slots.startTime || !slots.endTime) return;
+
+      setLoading(true);
+      setError(null);
+      try {
+        const list = await onListSpaces({
+          headcount: Number(slots.headcount),
+          ...(filters.campusCode ? { campusCode: filters.campusCode } : {}),
+          ...(filters.buildingNo ? { buildingNo: filters.buildingNo } : {}),
+        });
+        setCandidates(list);
+        setStep('list');
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [loading, busy, slots, filters, onListSpaces],
+  );
+
+  const runWith = useCallback(
+    (candidate: SpaceCandidate) => {
+      const filledSlots: FilledSlots = {
+        date: slots.date,
+        start_time: slots.startTime,
+        end_time: slots.endTime,
+        duration_min: null,
+        headcount: Number(slots.headcount),
+        building: candidate.buildingName,
+        space: candidate.roomName,
+      };
+      const formData: ReservationFormData = {
+        hangsaGbCode: form.hangsaGbCode,
+        organization: form.organization,
+        eventName: form.eventName,
+        headcount: Number(slots.headcount),
+        purpose: form.purpose,
+      };
+      void onRun({ slots: filledSlots, candidates: [candidate], formData });
+    },
+    [slots, form, onRun],
+  );
+
+  // ---------- Step: form ----------
+
+  if (step === 'form') {
+    return (
+      <form className="dev-panel" onSubmit={fetchCandidates}>
+        <div className="dev-panel__section">
+          <h3 className="dev-panel__title">슬롯</h3>
+          <div className="dev-panel__row">
+            <label>
+              날짜
+              <input
+                type="date"
+                value={slots.date}
+                onChange={(e) => setSlot('date', e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              인원
+              <input
+                type="number"
+                min={1}
+                value={slots.headcount}
+                onChange={(e) => setSlot('headcount', Number(e.target.value))}
+                required
+              />
+            </label>
+          </div>
+          <div className="dev-panel__row">
+            <label>
+              시작
+              <input
+                type="time"
+                value={slots.startTime}
+                onChange={(e) => setSlot('startTime', e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              종료
+              <input
+                type="time"
+                value={slots.endTime}
+                onChange={(e) => setSlot('endTime', e.target.value)}
+                required
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="dev-panel__section">
+          <h3 className="dev-panel__title">필터 (선택)</h3>
+          <div className="dev-panel__row">
+            <label>
+              캠퍼스
+              <select
+                value={filters.campusCode}
+                onChange={(e) => setFilter('campusCode', e.target.value)}
+              >
+                <option value="">전체</option>
+                <option value="1">인문사회과학</option>
+                <option value="2">자연과학</option>
+              </select>
+            </label>
+            <label>
+              건물번호
+              <input
+                value={filters.buildingNo}
+                onChange={(e) => setFilter('buildingNo', e.target.value)}
+                placeholder="예: 161"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="dev-panel__section">
+          <h3 className="dev-panel__title">신청서</h3>
+          <label>
+            행사구분 코드
+            <input
+              value={form.hangsaGbCode}
+              onChange={(e) => setF('hangsaGbCode', e.target.value)}
+              placeholder="111=학생회/동아리"
+              required
+            />
+          </label>
+          <label>
+            주관단체
+            <input
+              value={form.organization}
+              onChange={(e) => setF('organization', e.target.value)}
+              required
+            />
+          </label>
+          <label>
+            행사명
+            <input
+              value={form.eventName}
+              onChange={(e) => setF('eventName', e.target.value)}
+              required
+            />
+          </label>
+          <label>
+            사용목적
+            <textarea
+              value={form.purpose}
+              onChange={(e) => setF('purpose', e.target.value)}
+              rows={3}
+              required
+            />
+          </label>
+        </div>
+
+        {error && <div className="dev-panel__error">{error}</div>}
+
+        <button type="submit" className="btn btn--primary" disabled={loading || busy}>
+          {loading ? '조회 중…' : '공간 조회'}
+        </button>
+      </form>
+    );
   }
 
-  function submit(e: React.FormEvent): void {
-    e.preventDefault();
-    if (busy) return;
-
-    if (!v.date || !v.startTime || !v.endTime) return;
-
-    const slots: FilledSlots = {
-      date: v.date,
-      start_time: v.startTime,
-      end_time: v.endTime,
-      duration_min: null,
-      headcount: Number(v.headcount),
-      building: v.buildingName,
-      space: null,
-    };
-
-    const candidate: SpaceCandidate = {
-      glsSpaceCode: v.glsSpaceCode,
-      campusCode: v.campusCode,
-      buildingNo: v.buildingNo,
-      campusName: v.campusName,
-      buildingName: v.buildingName,
-      roomName: v.roomName,
-      capacityMin: Number(v.capacityMin),
-      capacityMax: Number(v.capacityMax),
-      useJojikName: null,
-      contents: null,
-      limitTimeHHMM: null,
-      isUserOrgPreferred: false,
-    };
-
-    const formData: ReservationFormData = {
-      hangsaGbCode: v.hangsaGbCode,
-      organization: v.organization,
-      eventName: v.eventName,
-      headcount: Number(v.headcount),
-      purpose: v.purpose,
-    };
-
-    void onRun({ slots, candidates: [candidate], formData });
-  }
+  // ---------- Step: list ----------
 
   return (
-    <form className="dev-panel" onSubmit={submit}>
-      <div className="dev-panel__section">
-        <h3 className="dev-panel__title">슬롯</h3>
-        <div className="dev-panel__row">
-          <label>
-            날짜
-            <input
-              type="date"
-              value={v.date}
-              onChange={(e) => set('date', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            인원
-            <input
-              type="number"
-              min={1}
-              value={v.headcount}
-              onChange={(e) => set('headcount', Number(e.target.value))}
-              required
-            />
-          </label>
-        </div>
-        <div className="dev-panel__row">
-          <label>
-            시작
-            <input
-              type="time"
-              value={v.startTime}
-              onChange={(e) => set('startTime', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            종료
-            <input
-              type="time"
-              value={v.endTime}
-              onChange={(e) => set('endTime', e.target.value)}
-              required
-            />
-          </label>
-        </div>
+    <div className="dev-panel">
+      <div className="dev-panel__list-header">
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setStep('form')}
+          disabled={busy}
+        >
+          ← 조건 수정
+        </button>
+        <span className="dev-panel__list-count">
+          {slots.date} {slots.startTime}-{slots.endTime} · {slots.headcount}명
+          {' · '}
+          후보 {candidates.length}개
+        </span>
       </div>
 
-      <div className="dev-panel__section">
-        <h3 className="dev-panel__title">후보 공간</h3>
-        <div className="dev-panel__row">
-          <label>
-            캠퍼스 코드
-            <input
-              value={v.campusCode}
-              onChange={(e) => set('campusCode', e.target.value)}
-              placeholder="1=인문, 2=자연"
-              required
-            />
-          </label>
-          <label>
-            캠퍼스명
-            <input
-              value={v.campusName}
-              onChange={(e) => set('campusName', e.target.value)}
-              required
-            />
-          </label>
+      {candidates.length === 0 ? (
+        <div className="dev-panel__empty">
+          조건에 맞는 공간이 없습니다. 인원/필터를 조정해 다시 조회해보세요.
         </div>
-        <div className="dev-panel__row">
-          <label>
-            건물번호
-            <input
-              value={v.buildingNo}
-              onChange={(e) => set('buildingNo', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            건물명
-            <input
-              value={v.buildingName}
-              onChange={(e) => set('buildingName', e.target.value)}
-              required
-            />
-          </label>
-        </div>
-        <div className="dev-panel__row">
-          <label>
-            공간코드
-            <input
-              value={v.glsSpaceCode}
-              onChange={(e) => set('glsSpaceCode', e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            공간명
-            <input
-              value={v.roomName}
-              onChange={(e) => set('roomName', e.target.value)}
-              required
-            />
-          </label>
-        </div>
-        <div className="dev-panel__row">
-          <label>
-            정원 min
-            <input
-              type="number"
-              min={1}
-              value={v.capacityMin}
-              onChange={(e) => set('capacityMin', Number(e.target.value))}
-            />
-          </label>
-          <label>
-            정원 max
-            <input
-              type="number"
-              min={1}
-              value={v.capacityMax}
-              onChange={(e) => set('capacityMax', Number(e.target.value))}
-            />
-          </label>
-        </div>
-      </div>
-
-      <div className="dev-panel__section">
-        <h3 className="dev-panel__title">신청서</h3>
-        <label>
-          행사구분 코드
-          <input
-            value={v.hangsaGbCode}
-            onChange={(e) => set('hangsaGbCode', e.target.value)}
-            placeholder="111=학생회/동아리"
-            required
-          />
-        </label>
-        <label>
-          주관단체
-          <input
-            value={v.organization}
-            onChange={(e) => set('organization', e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          행사명
-          <input
-            value={v.eventName}
-            onChange={(e) => set('eventName', e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          사용목적
-          <textarea
-            value={v.purpose}
-            onChange={(e) => set('purpose', e.target.value)}
-            rows={3}
-            required
-          />
-        </label>
-      </div>
-
-      <button type="submit" className="btn btn--primary" disabled={busy}>
-        자동화 시작
-      </button>
-    </form>
+      ) : (
+        <ul className="dev-panel__candidates">
+          {candidates.map((c) => (
+            <li key={c.glsSpaceCode} className="dev-panel__candidate">
+              <div className="dev-panel__candidate-main">
+                <div className="dev-panel__candidate-title">
+                  {c.buildingName} {c.roomName}{' '}
+                  <span className="dev-panel__candidate-code">[{c.glsSpaceCode}]</span>
+                </div>
+                <div className="dev-panel__candidate-meta">
+                  {c.campusName} · 수용 {c.capacityMin}~{c.capacityMax}명
+                  {c.isUserOrgPreferred ? ' · 소속 우선' : ''}
+                </div>
+                {c.useJojikName && (
+                  <div className="dev-panel__candidate-org">권한: {c.useJojikName}</div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn--primary"
+                onClick={() => runWith(c)}
+                disabled={busy}
+              >
+                선택
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
