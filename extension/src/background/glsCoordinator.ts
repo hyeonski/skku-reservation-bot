@@ -65,7 +65,11 @@ async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
       return tabs[0];
     }
   }
-  return chrome.tabs.create({ url: GLS_URL, active: true });
+  // 새 탭은 background 로 (active:false) 열어 popup 이 닫히지 않도록 한다.
+  // popup 은 새 탭이 활성화되면 자동 dismiss 되기 때문. 자동화는 비활성 탭에서도
+  // content script + nexacro 가 정상 동작 (검증 2026-05-13). 사용자가 진행을 보고
+  // 싶으면 수동으로 탭 전환.
+  return chrome.tabs.create({ url: GLS_URL, active: false });
 }
 
 async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
