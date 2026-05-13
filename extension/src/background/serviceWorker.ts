@@ -309,6 +309,7 @@ async function handleDevRunAutomation(
       slots: msg.slots,
       candidates: msg.candidates,
       pendingFormData: msg.formData,
+      forceNewTab: true, // dev 모드는 항상 새 탭 — stale state 회피
       onStatusChange: emit,
     })
     .catch((e) => {

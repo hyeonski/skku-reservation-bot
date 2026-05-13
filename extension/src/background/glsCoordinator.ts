@@ -58,17 +58,46 @@ export function clearQueue(conversationId: string): void {
 
 // ----- small chrome.* promise helpers -----
 
-async function findOrCreateGlsTab(): Promise<chrome.tabs.Tab> {
-  const tabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
-  if (tabs.length > 0 && tabs[0].id !== undefined) {
-    return tabs[0];
+async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
+  if (!forceNew) {
+    const tabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
+    if (tabs.length > 0 && tabs[0].id !== undefined) {
+      return tabs[0];
+    }
   }
-  return chrome.tabs.create({ url: GLS_URL, active: false });
+  return chrome.tabs.create({ url: GLS_URL, active: true });
 }
 
 async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
   // MV3: chrome.tabs.sendMessage returns a Promise if no callback supplied.
   return (await chrome.tabs.sendMessage(tabId, msg)) as TRes;
+}
+
+/**
+ * 새로 만든 (또는 막 만든) GLS 탭에서 content script 가 로드돼서
+ * BG_CHECK_SESSION 에 응답할 때까지 폴링한다.
+ *
+ * 새 탭은 chrome.tabs.create 직후엔 content script 가 아직 inject 되지 않은 상태라
+ * sendMessage 가 "Could not establish connection" 으로 즉시 throw 한다. 이걸
+ * "로그인 안 됨" 으로 잘못 매핑하지 않도록, 최대 20s 동안 짧은 간격으로 재시도.
+ */
+async function waitForContentReady(tabId: number, timeoutMs = 20000): Promise<ContentSessionState> {
+  const start = Date.now();
+  let lastErr: Error | null = null;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const res = await sendToTab<BgCheckSession, ContentSessionState>(tabId, {
+        type: 'BG_CHECK_SESSION',
+      });
+      return res;
+    } catch (e) {
+      lastErr = e as Error;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+  throw new Error(
+    `content script not ready in ${timeoutMs}ms: ${lastErr?.message ?? 'unknown'}`,
+  );
 }
 
 function pickFirstCampusBuilding(slots: FilledSlots): { campusCode?: string; buildingNo?: string } {
@@ -97,6 +126,8 @@ export interface RunReservationFlowArgs {
   candidates?: SpaceCandidate[];
   /** Dev: confirm 시 사용할 formData 를 미리 큐에 저장. */
   pendingFormData?: ReservationFormData;
+  /** Dev: 기존 탭 재사용 대신 새 탭 강제 생성. */
+  forceNewTab?: boolean;
 }
 
 export async function runReservationFlow(args: RunReservationFlowArgs): Promise<void> {
@@ -115,7 +146,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 
   let tab: chrome.tabs.Tab;
   try {
-    tab = await findOrCreateGlsTab();
+    tab = await findOrCreateGlsTab(args.forceNewTab === true);
   } catch (e) {
     onStatusChange({ kind: 'error', message: `GLS 탭 열기 실패: ${(e as Error).message}` });
     return;
@@ -126,15 +157,15 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   }
   const tabId = tab.id;
 
-  // session check
+  // session check — content script 가 로드될 때까지 폴링 (새 탭은 inject 까지 시간 필요).
   let session: ContentSessionState;
   try {
-    session = await sendToTab<BgCheckSession, ContentSessionState>(tabId, { type: 'BG_CHECK_SESSION' });
+    session = await waitForContentReady(tabId);
   } catch (e) {
-    // Likely content script not ready (e.g. tab just opened) — surface as login_required so
-    // the user activates the tab and the content script can initialize.
-    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-    onStatusChange({ kind: 'login_required' });
+    onStatusChange({
+      kind: 'error',
+      message: `GLS 페이지 준비 실패: ${(e as Error).message}`,
+    });
     return;
   }
   if (!session.loggedIn) {

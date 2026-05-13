@@ -69,9 +69,21 @@ export async function openReservationModal(): Promise<void> {
     var G = window.__GLS__;
     var wait = G.wait;
 
+    // 0. Nexacro 앱 + 상단 메뉴가 렌더링될 때까지 대기 (새 탭에서 페이지 로드 후 첫 진입 시 필요).
+    var menu = null;
+    for (var t = 0; t < 75; t++) {
+      try {
+        if (typeof window.nexacro !== 'undefined' && window.nexacro.getApplication && window.nexacro.getApplication()) {
+          menu = G.byIdSuffix(${JSON.stringify(menuCode)});
+          if (menu && menu.offsetParent !== null) break;
+        }
+      } catch (_) { /* nexacro not ready */ }
+      await wait(200);
+      menu = null;
+    }
+    if (!menu) throw new Error('menu not visible after load: ${menuCode}');
+
     // 1. 신청/자격관리 메뉴 클릭
-    var menu = G.byIdSuffix(${JSON.stringify(menuCode)});
-    if (!menu) throw new Error('menu not found: ${menuCode}');
     G.nexClick(menu);
     await wait(500);
 
