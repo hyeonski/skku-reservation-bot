@@ -1,5 +1,7 @@
 // Phase 1 스키마 — D-022(Space), D-023(Client, Conversation) 반영.
 // 시딩은 server/scripts/scrape-spaces.ts 에서 dsCboSpace를 dump하여 Space로 upsert.
+//
+// 컨벤션: TS 모델 식별자는 camelCase, DB 식별자는 snake_case (@@map / @map 으로 매핑).
 
 generator client {
   provider = "prisma-client-js"
@@ -14,9 +16,11 @@ datasource db {
 
 model Client {
   id            String         @id @db.Char(36) // UUID v4
-  createdAt     DateTime       @default(now())
-  lastSeenAt    DateTime       @updatedAt
+  createdAt     DateTime       @default(now()) @map("created_at")
+  lastSeenAt    DateTime       @updatedAt @map("last_seen_at")
   conversations Conversation[]
+
+  @@map("client")
 }
 
 // ---------- 대화 (D-018: 클라 권위 + 서버 매 턴 mirror) ----------
@@ -29,64 +33,66 @@ enum ConversationStatus {
 }
 
 model Conversation {
-  id              String             @id @db.Char(36)
-  clientId        String             @db.Char(36)
-  client          Client             @relation(fields: [clientId], references: [id])
+  id       String @id @db.Char(36)
+  clientId String @map("client_id") @db.Char(36)
+  client   Client @relation(fields: [clientId], references: [id])
 
   status          ConversationStatus @default(active)
   history         Json
-  lastIntent      String?            @db.VarChar(40)
-  lastFilledSlots Json?
+  lastIntent      String?            @map("last_intent") @db.VarChar(40)
+  lastFilledSlots Json?              @map("last_filled_slots")
 
-  startedAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
-  completedAt     DateTime?
+  startedAt   DateTime  @default(now()) @map("started_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  completedAt DateTime? @map("completed_at")
 
   @@index([clientId, updatedAt])
   @@index([status, updatedAt])
+  @@map("conversation")
 }
 
 // ---------- 공간 메타데이터 (D-022) ----------
 
 model Space {
-  id            String   @id @default(uuid()) @db.Char(36)
+  id String @id @default(uuid()) @db.Char(36)
 
   // GLS 식별 코드 (자동화 1순위)
-  glsSpaceCode  String   @unique @db.VarChar(40) // GU_SPACE_CD
-  campusCode    String   @db.VarChar(8)          // CAMPUS_CD "1" | "2"
-  buildingNo    String   @db.VarChar(16)         // BUILD_NO
+  glsSpaceCode String @unique @map("gls_space_code") @db.VarChar(40) // GU_SPACE_CD
+  campusCode   String @map("campus_code") @db.VarChar(8) // CAMPUS_CD "1" | "2"
+  buildingNo   String @map("building_no") @db.VarChar(16) // BUILD_NO
 
   // 표시명
-  campusName    String   @db.VarChar(40)
-  buildingName  String   @db.VarChar(80)
-  roomName      String   @db.VarChar(120)
+  campusName   String @map("campus_name") @db.VarChar(40)
+  buildingName String @map("building_name") @db.VarChar(80)
+  roomName     String @map("room_name") @db.VarChar(120)
 
   // 정원 범위
-  capacityMin   Int
-  capacityMax   Int
+  capacityMin Int @map("capacity_min")
+  capacityMax Int @map("capacity_max")
 
   // 학과 제한 / 운영 주체
-  useJojikCode   String?  @db.VarChar(20)
-  useJojikName   String?  @db.VarChar(120)
-  adminJojikCode String?  @db.VarChar(20)
-  adminJojikName String?  @db.VarChar(120)
+  useJojikCode   String? @map("use_jojik_code") @db.VarChar(20)
+  useJojikName   String? @map("use_jojik_name") @db.VarChar(120)
+  adminJojikCode String? @map("admin_jojik_code") @db.VarChar(20)
+  adminJojikName String? @map("admin_jojik_name") @db.VarChar(120)
 
   // 공지 / 제약
-  contents      String?  @db.Text
-  limitDayYn    Boolean  @default(false)
-  limitDay      Int?
-  limitTimeYn   Boolean  @default(false)
-  limitTimeHHMM String?  @db.VarChar(4)
-  daeyeoGb      String?  @db.VarChar(4)
+  contents      String? @db.Text
+  limitDayYn    Boolean @default(false) @map("limit_day_yn")
+  limitDay      Int?    @map("limit_day")
+  limitTimeYn   Boolean @default(false) @map("limit_time_yn")
+  limitTimeHHMM String? @map("limit_time_hhmm") @db.VarChar(4)
+  daeyeoGb      String? @map("daeyeo_gb") @db.VarChar(4)
 
   // 시딩 관리
-  scrapedAt     DateTime
-  active        Boolean  @default(true)
+  scrapedAt DateTime @map("scraped_at")
+  active    Boolean  @default(true)
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
 
   @@index([capacityMin, capacityMax])
   @@index([campusCode, buildingNo])
   @@index([useJojikCode])
+  @@map("space")
 }
