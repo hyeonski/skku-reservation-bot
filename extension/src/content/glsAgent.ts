@@ -68,20 +68,22 @@ export async function checkAvailability(
   await openReservationModal();
   const yyyymmdd = toYyyymmdd(date);
 
-  // 캠퍼스 변경 → calUseDt reset → 미리 채워둬야 cboBuildCd cascade 가 dsCboSpace 를 로드함.
-  console.log('[GLS-iso] step: select campus', candidate.campusName);
-  await runInPage('selectComboByText', {
+  // 캠퍼스 / 건물 cascade — code 값을 직접 set 하고 OnChanged 명시 호출.
+  // (dropdown 클릭 기반 selectComboByText 는 새 탭 fresh 모달에서 combolist
+  //  lazy render race 가 있어 불안정.)
+  console.log('[GLS-iso] step: set campus', candidate.campusCode, `(${candidate.campusName})`);
+  await runInPage('setComboAndFireChange', {
     suffix: 'cboCampusCd',
-    label: candidate.campusName,
+    value: candidate.campusCode,
   });
   await sleep(700);
   console.log('[GLS-iso] step: prime calUseDt', yyyymmdd);
   await runInPage('setComponentValue', { suffix: 'calUseDt', value: yyyymmdd });
   await sleep(200);
-  console.log('[GLS-iso] step: select building', candidate.buildingName);
-  await runInPage('selectComboByText', {
+  console.log('[GLS-iso] step: set building', candidate.buildingNo, `(${candidate.buildingName})`);
+  await runInPage('setComboAndFireChange', {
     suffix: 'cboBuildCd',
-    label: candidate.buildingName,
+    value: candidate.buildingNo,
   });
   await sleep(1500);
 

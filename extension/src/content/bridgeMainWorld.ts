@@ -231,6 +231,39 @@ declare global {
       return true;
     },
 
+    /**
+     * 콤보를 코드 값으로 set 하고 cascade OnChanged 핸들러를 명시 호출.
+     *
+     * dropdown 클릭 기반 selectComboByText 는 새 탭 fresh 모달에서 combolist
+     * lazy render race 가 있어 (검증 2026-05-13) 불안정. 코드 값을 알고 있는
+     * 케이스 (대부분의 dev/prod 흐름) 에서는 이 op 가 더 신뢰성 높다.
+     */
+    setComboAndFireChange: (args: { suffix: string; value: string }): true => {
+      const dm = activeModalDM();
+      const popupForm = activePopupForm();
+      const cmp = dm[args.suffix];
+      if (!cmp) throw new Error('component not found: ' + args.suffix);
+      const prev = cmp.value;
+      console.log('[GLS] setComboAndFireChange', args.suffix, prev, '→', args.value);
+      cmp.set_value(args.value);
+      const handlerName = `divManage_${args.suffix}_OnChanged`;
+      const handler = popupForm[handlerName];
+      if (typeof handler === 'function') {
+        try {
+          handler.call(popupForm, cmp, {
+            fromobject: cmp,
+            postvalue: args.value,
+            prevalue: prev ?? '',
+          });
+        } catch (e) {
+          console.warn('[GLS] OnChanged threw (non-fatal):', handlerName, e);
+        }
+      } else {
+        console.warn('[GLS] no OnChanged handler:', handlerName);
+      }
+      return true;
+    },
+
     /** 단일 컴포넌트 값 set (cascade 없는 단순 커밋용). */
     setComponentValue: (args: { suffix: string; value: string | number }): true => {
       const dm = activeModalDM();
@@ -336,6 +369,29 @@ declare global {
         }
       }
       return { ok: false, error: 'submit result unknown (timeout)' };
+    },
+
+    /** 특정 콤보 suffix 의 DOM 구조 dump. dropdown 클릭 실패 디버깅용. */
+    debugComboDom: (args: { suffix: string }): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      const k = popupKey();
+      if (!k) return { err: 'no popup' };
+      const prefix = `mainframe.TopFrame.${k}.`;
+      const drop = document.querySelector(
+        `div[id^="${prefix}"][id*=".${args.suffix}.dropbutton"]:not([id$=":icontext"])`,
+      );
+      out.dropbuttonFound = !!drop;
+      out.dropbuttonVisible = drop ? (drop as HTMLElement).offsetParent !== null : false;
+      const all = Array.from(
+        document.querySelectorAll(`[id^="${prefix}"][id*=".${args.suffix}"]`),
+      )
+        .slice(0, 30)
+        .map((el) => ({
+          idTail: el.id.split(args.suffix + '.').pop() ?? el.id.slice(-40),
+          visible: (el as HTMLElement).offsetParent !== null,
+        }));
+      out.allMatching = all;
+      return out;
     },
 
     /** 모달의 현재 상태 디버그 dump. */
