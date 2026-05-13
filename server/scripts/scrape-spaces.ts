@@ -277,9 +277,37 @@ async function dismissAlertIfShown(page: Page): Promise<void> {
   }
 }
 
-async function selectCampus(page: Page, campusName: string): Promise<void> {
+async function selectCampus(
+  page: Page,
+  campusName: string,
+  campusCode: string,
+): Promise<void> {
   await nativeSelectCombo(page, MODAL_FIELDS.캠퍼스, campusName);
-  await sleep(1500);
+  // dsCboBuildCd 가 새 캠퍼스 row 들로 갱신될 때까지 폴링 (sleep(1500) 단독은
+  // 느린 네트워크에서 race). distinctCampus mismatch 재시도는 호출부에서 유지.
+  await page
+    .waitForFunction(
+      ({ ds, code }) => {
+        try {
+          const g = (window as any).__gls;
+          const d = g.activePopupForm()[ds];
+          if (!d || typeof d.getRowCount !== 'function') return false;
+          for (let i = 0; i < d.getRowCount(); i++) {
+            const c = d.getColumn(i, 'CAMPUS_CD');
+            if (c && String(c) === String(code)) return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+      { ds: DATASETS.building, code: campusCode },
+      { timeout: 5000 },
+    )
+    .catch(() => {
+      /* mismatch fallback 은 호출부에서 처리 */
+    });
+  await sleep(300);
 }
 
 /**
@@ -596,7 +624,7 @@ async function main(): Promise<void> {
       console.log(`\n[scrape] ===== Campus: ${campusName} (${campus.COM_CD}) =====`);
 
       try {
-        await selectCampus(page, campusName);
+        await selectCampus(page, campusName, campus.COM_CD);
       } catch (e) {
         console.error(`[scrape] failed to select campus "${campusName}":`, e);
         continue;

@@ -142,6 +142,70 @@ export function setComboValue(dm: any, comboSuffix: string, code: string): void 
   combo.set_value(code);
 }
 
+/**
+ * 콤보를 코드값으로 set 하고 cascade `OnChanged` 핸들러를 명시 호출.
+ *
+ * dropdown 클릭 기반 `selectComboByText` 는 새 탭 fresh 모달에서 combolist
+ * lazy render race 가 있어 (검증 2026-05-13) 코드값을 아는 케이스 (예약 자동화의
+ * campus·building cascade) 에서는 이 헬퍼가 더 신뢰성 높다.
+ *
+ * 주의: `calUseDt_OnChanged` 등 일부 핸들러는 내부 검증 실패 시 alert 를 띄울 수
+ * 있다 (예: "건물을 먼저 선택 하세요!"). 단순 값 커밋만 필요한 경우 `setComboValue`.
+ */
+export function setComboAndFireChange(dm: any, comboSuffix: string, value: string): void {
+  const cmp = dm[comboSuffix];
+  if (!cmp) throw new Error(`combo not found: ${comboSuffix}`);
+  const prev = cmp.value;
+  cmp.set_value(value);
+  // popup form 측 OnChanged 핸들러는 `divManage_<suffix>_OnChanged` 컨벤션.
+  const popupForm = activePopupForm();
+  const handler = popupForm[`divManage_${comboSuffix}_OnChanged`];
+  if (typeof handler === 'function') {
+    try {
+      handler.call(popupForm, cmp, {
+        fromobject: cmp,
+        postvalue: value,
+        prevalue: prev ?? '',
+      });
+    } catch (e) {
+      // 핸들러 내 alert / 분기 실패 등은 비치명적 — 호출자가 값 검증으로 판단.
+    }
+  }
+}
+
+/**
+ * 데이터셋에 `(column == value)` 인 row 가 나타날 때까지 폴링.
+ * 캠퍼스 → 건물 cascade 처럼 비동기 server transaction 결과를 기다릴 때 사용.
+ *
+ * 예: 캠퍼스 변경 후 `dsCboBuildCd` 에 target `BUILD_NO` 가 들어올 때까지 대기.
+ */
+export async function waitForDatasetValue(
+  form: any,
+  dsName: string,
+  column: string,
+  value: string,
+  timeoutMs = 5000,
+): Promise<void> {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const ds = form[dsName];
+      if (ds && typeof ds.getRowCount === 'function') {
+        for (let i = 0; i < ds.getRowCount(); i++) {
+          if (String(ds.getColumn(i, column)) === String(value)) return;
+        }
+      }
+    } catch {
+      /* dataset not ready */
+    }
+    await sleep(200);
+  }
+  throw new Error(
+    `dataset ${dsName}.${column} did not contain "${value}" within ${timeoutMs}ms`,
+  );
+}
+
 // ---------- 데이터셋 ----------
 
 /** popup form에서 데이터셋 1개를 row 배열로 dump */
