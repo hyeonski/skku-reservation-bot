@@ -163,11 +163,29 @@ declare global {
       nexClick(btn);
 
       // 4. popupFrame 등장 대기 (최대 5s)
+      let key: string | null = null;
       for (let i = 0; i < 25; i++) {
-        if (popupKey()) { console.log('[GLS] modal popupFrame ready'); return true; }
+        key = popupKey();
+        if (key) break;
         await wait(200);
       }
-      throw new Error('reservation modal did not open');
+      if (!key) throw new Error('reservation modal did not open');
+      console.log('[GLS] modal popupFrame ready', key);
+
+      // 5. 모달 내부 DOM (divManage.cboCampusCd.dropbutton) 가시 대기.
+      //    popupFrame 생성 직후엔 내부 컴포넌트가 아직 lazy render 되지 않은 케이스 있음.
+      const prefix = `mainframe.TopFrame.${key}.`;
+      const probeSel = `div[id^="${prefix}"][id$=".cboCampusCd.dropbutton"]:not([id$=":icontext"])`;
+      for (let i = 0; i < 25; i++) {
+        const el = document.querySelector<HTMLElement>(probeSel);
+        if (el && el.offsetParent !== null) {
+          console.log('[GLS] modal internal DOM ready');
+          return true;
+        }
+        await wait(200);
+      }
+      console.warn('[GLS] modal internal DOM not visible after 5s — proceeding anyway');
+      return true;
     },
 
     /**
@@ -181,7 +199,14 @@ declare global {
       console.log('[GLS] selectComboByText', suffix, '←', label);
       const prefix = popupPrefix();
       const dropSel = `div[id^="${prefix}"][id$=".${suffix}.dropbutton"]:not([id$=":icontext"])`;
-      const drop = document.querySelector<HTMLElement>(dropSel);
+      // 모달 컴포넌트 DOM 이 lazy 렌더링되는 경우가 있어 dropbutton 가시까지 최대 5s 폴링.
+      let drop: HTMLElement | null = null;
+      const dropDeadline = Date.now() + 5000;
+      while (Date.now() < dropDeadline) {
+        drop = document.querySelector<HTMLElement>(dropSel);
+        if (drop && drop.offsetParent !== null) break;
+        await wait(200);
+      }
       if (!drop) throw new Error('dropbutton not found: ' + dropSel);
       nexClick(drop);
 
@@ -333,31 +358,37 @@ declare global {
     },
   };
 
-  // ---------- postMessage RPC 라우터 ----------
+  // ---------- CustomEvent 기반 RPC 라우터 ----------
+  //
+  // window.postMessage 를 쓰면 Nexacro 의 __pWindow._on_default_sys_message 가
+  // 모든 메시지의 data.id 에 .split() 을 호출하면서 TypeError 가 일어나고 내부
+  // 상태가 깨지는 현상이 발견됐다 (검증 2026-05-13). 동일 origin 의 isolated ↔
+  // main world 통신은 CustomEvent.detail 로도 충분하고, Nexacro 의 메시지 핸들러
+  // 와 완전히 분리된다.
 
-  window.addEventListener('message', (event) => {
-    if (event.source !== window) return;
-    const data = event.data as
-      | { type: 'GLS_AGENT_EXEC'; id: number; op: string; args?: unknown }
+  const EVENT_EXEC = 'GLS_AGENT_EXEC';
+  const EVENT_RESULT = 'GLS_AGENT_RESULT';
+
+  window.addEventListener(EVENT_EXEC, (event: Event) => {
+    const detail = (event as CustomEvent).detail as
+      | { id: number; op: string; args?: unknown }
       | undefined;
-    if (!data || data.type !== 'GLS_AGENT_EXEC' || typeof data.id !== 'number') return;
+    if (!detail || typeof detail.id !== 'number') return;
 
-    const { id, op, args } = data;
+    const { id, op, args } = detail;
     void (async () => {
       try {
         const fn = ops[op];
         if (!fn) throw new Error('unknown op: ' + op);
         const result = await fn(args);
-        window.postMessage(
-          { type: 'GLS_AGENT_RESULT', id, ok: true, result },
-          '*',
+        window.dispatchEvent(
+          new CustomEvent(EVENT_RESULT, { detail: { id, ok: true, result } }),
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         console.warn('[GLS] op failed:', op, message);
-        window.postMessage(
-          { type: 'GLS_AGENT_RESULT', id, ok: false, error: message },
-          '*',
+        window.dispatchEvent(
+          new CustomEvent(EVENT_RESULT, { detail: { id, ok: false, error: message } }),
         );
       }
     })();

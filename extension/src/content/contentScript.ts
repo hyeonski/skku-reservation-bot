@@ -22,7 +22,14 @@ import type {
 } from '../shared/messages';
 import { checkSession, checkAvailability, submitReservation } from './glsAgent';
 
-// ---------- main-world RPC ----------
+// ---------- main-world RPC (CustomEvent 기반) ----------
+//
+// window.postMessage 를 쓰면 Nexacro 의 __pWindow._on_default_sys_message 가
+// data.id 에 .split() 을 시도하면서 TypeError 가 나고 내부 상태가 깨진다.
+// 같은 window 내 isolated ↔ main world 통신은 CustomEvent.detail 로 충분.
+
+const EVENT_EXEC = 'GLS_AGENT_EXEC';
+const EVENT_RESULT = 'GLS_AGENT_RESULT';
 
 let rpcSeq = 0;
 const pending = new Map<
@@ -30,15 +37,16 @@ const pending = new Map<
   { resolve: (v: unknown) => void; reject: (e: Error) => void }
 >();
 
-window.addEventListener('message', (event) => {
-  if (event.source !== window) return;
-  const data = event.data;
-  if (!data || data.type !== 'GLS_AGENT_RESULT') return;
-  const entry = pending.get(data.id);
+window.addEventListener(EVENT_RESULT, (event: Event) => {
+  const detail = (event as CustomEvent).detail as
+    | { id: number; ok: boolean; result?: unknown; error?: string }
+    | undefined;
+  if (!detail || typeof detail.id !== 'number') return;
+  const entry = pending.get(detail.id);
   if (!entry) return;
-  pending.delete(data.id);
-  if (data.ok) entry.resolve(data.result);
-  else entry.reject(new Error(data.error || 'bridge error'));
+  pending.delete(detail.id);
+  if (detail.ok) entry.resolve(detail.result);
+  else entry.reject(new Error(detail.error || 'bridge error'));
 });
 
 /**
@@ -70,7 +78,7 @@ export async function runInPage<T = unknown>(
         reject(e);
       },
     });
-    window.postMessage({ type: 'GLS_AGENT_EXEC', id, op, args }, '*');
+    window.dispatchEvent(new CustomEvent(EVENT_EXEC, { detail: { id, op, args } }));
   });
 }
 
