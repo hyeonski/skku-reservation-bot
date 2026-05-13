@@ -233,6 +233,9 @@ async function handleStartSearch(
     .runReservationFlow({
       conversationId: msg.conversationId,
       slots: msg.slots,
+      // 항상 새 탭 (active:false). popup 이 닫히지 않고, 확장 reload 로 orphaned 된
+      // 기존 탭의 content script 와 충돌하지 않으며, 직전 자동화의 stale 모달 상태도 회피.
+      forceNewTab: true,
       onStatusChange: emit,
     })
     .catch((e) => {

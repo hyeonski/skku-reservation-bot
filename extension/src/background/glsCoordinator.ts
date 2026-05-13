@@ -12,7 +12,12 @@
  * 비활성 탭에서도 자동화 시도 (D-027). 단계별 실패 시 활성화 안내로 fallback (TODO 슬라이스 9에서 강화).
  */
 
-import type { FilledSlots, AutomationStatus, SpaceCandidate } from '../shared/types';
+import type {
+  FilledSlots,
+  AutomationStatus,
+  SpaceCandidate,
+  SearchLogEntry,
+} from '../shared/types';
 import type {
   BgCheckSession,
   BgCheckAvailability,
@@ -42,6 +47,8 @@ export interface CandidateQueueState {
   totalCount: number;
   triedCount: number;
   lastProposed: SpaceCandidate | null;
+  /** 각 후보 시도 결과 누적 — popup 에 탐색 로그로 노출. */
+  log: SearchLogEntry[];
   /** Dev panel·미래의 행사메타 collector가 미리 채워둔 formData. confirm 시 fallback 으로 사용. */
   pendingFormData?: ReservationFormData;
 }
@@ -120,6 +127,22 @@ function parseHourFromHHMM(hhmm: string | null): number {
   return Number.parseInt(h, 10);
 }
 
+/**
+ * end_time 이 null 이고 duration_min 만 있는 경우 (LLM 이 "2시간" 같은 표현을
+ * duration_min 으로 채운 케이스) start_time + duration_min 으로 계산.
+ * 24h 넘어가는 자정 over flow 는 분 단위만 % 1440 으로 wrap.
+ */
+function deriveEndTime(slots: FilledSlots): string | null {
+  if (slots.end_time) return slots.end_time;
+  if (!slots.start_time || slots.duration_min == null) return null;
+  const [hRaw, mRaw] = slots.start_time.split(':');
+  const startMin = Number.parseInt(hRaw!, 10) * 60 + Number.parseInt(mRaw!, 10);
+  const endMin = (startMin + slots.duration_min) % (24 * 60);
+  const eh = String(Math.floor(endMin / 60)).padStart(2, '0');
+  const em = String(endMin % 60).padStart(2, '0');
+  return `${eh}:${em}`;
+}
+
 // ----- flow entry -----
 
 export interface RunReservationFlowArgs {
@@ -141,7 +164,9 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     onStatusChange({ kind: 'error', message: 'headcount이 비어 있습니다.' });
     return;
   }
-  if (!slots.date || !slots.start_time || !slots.end_time) {
+  // LLM 이 end_time 대신 duration_min 만 채우는 경우가 있어 정규화.
+  const endTime = deriveEndTime(slots);
+  if (!slots.date || !slots.start_time || !endTime) {
     onStatusChange({ kind: 'error', message: '날짜·시간 슬롯이 비어 있습니다.' });
     return;
   }
@@ -195,12 +220,12 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   }
 
   if (candidates.length === 0) {
-    onStatusChange({ kind: 'no_candidate' });
+    onStatusChange({ kind: 'no_candidate', log: [] });
     return;
   }
 
   const startHour = parseHourFromHHMM(slots.start_time);
-  const endHour = parseHourFromHHMM(slots.end_time);
+  const endHour = parseHourFromHHMM(endTime);
 
   const state: CandidateQueueState = {
     conversationId,
@@ -209,16 +234,22 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     startHour,
     endHour,
     startTime: slots.start_time,
-    endTime: slots.end_time,
+    endTime,
     remaining: [...candidates],
     totalCount: candidates.length,
     triedCount: 0,
     lastProposed: null,
+    log: [],
     pendingFormData: args.pendingFormData,
   };
   queues.set(conversationId, state);
 
-  onStatusChange({ kind: 'searching', tried: 0, total: state.totalCount });
+  onStatusChange({
+    kind: 'searching',
+    tried: 0,
+    total: state.totalCount,
+    log: state.log,
+  });
 
   await searchNext(state, onStatusChange);
 }
@@ -234,10 +265,12 @@ async function searchNext(
   while (state.remaining.length > 0) {
     const candidate = state.remaining.shift()!;
     state.triedCount += 1;
+    // 시도 시작 시점 — 현재 후보 표시
     onStatusChange({
       kind: 'searching',
       tried: state.triedCount,
       total: state.totalCount,
+      log: state.log,
     });
 
     let result: ContentAvailabilityResult;
@@ -254,9 +287,32 @@ async function searchNext(
         endTime: state.endTime,
       });
     } catch (e) {
-      // Skip on transient content errors; continue with next candidate.
+      // Transient content error — 로그에 실패로 남기고 다음 후보로.
+      state.log.push({
+        glsSpaceCode: candidate.glsSpaceCode,
+        buildingName: candidate.buildingName,
+        roomName: candidate.roomName,
+        available: false,
+        conflicts: [
+          { kind: '예약', timeTerm: '', info: `통신 오류: ${(e as Error).message}` },
+        ],
+      });
+      onStatusChange({
+        kind: 'searching',
+        tried: state.triedCount,
+        total: state.totalCount,
+        log: state.log,
+      });
       continue;
     }
+
+    state.log.push({
+      glsSpaceCode: candidate.glsSpaceCode,
+      buildingName: candidate.buildingName,
+      roomName: candidate.roomName,
+      available: result.available,
+      conflicts: result.conflicts ?? [],
+    });
 
     if (result.available) {
       state.lastProposed = candidate;
@@ -264,8 +320,8 @@ async function searchNext(
         kind: 'candidate_found',
         spaceCode: candidate.glsSpaceCode,
         spaceName: candidate.roomName,
+        log: state.log,
       });
-      // Push proposal to popup (popup may be closed; non-fatal).
       const proposal: BgCandidateProposal = {
         type: 'BG_CANDIDATE_PROPOSAL',
         conversationId: state.conversationId,
@@ -274,13 +330,21 @@ async function searchNext(
       try {
         await chrome.runtime.sendMessage(proposal);
       } catch {
-        // popup not open — fine. Status update was already emitted.
+        /* popup not open */
       }
-      return; // wait for POPUP_CONFIRM_RESERVATION
+      return;
     }
+
+    // 충돌 — 다음 후보 시도. 누적 로그 emit.
+    onStatusChange({
+      kind: 'searching',
+      tried: state.triedCount,
+      total: state.totalCount,
+      log: state.log,
+    });
   }
 
-  onStatusChange({ kind: 'no_candidate' });
+  onStatusChange({ kind: 'no_candidate', log: state.log });
   queues.delete(state.conversationId);
 }
 

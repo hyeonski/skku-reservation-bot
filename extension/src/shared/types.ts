@@ -36,16 +36,30 @@ export interface ParseResult {
   assistant_message: string;
 }
 
+/** 자동화 탐색 로그 — 후보 1개 시도 결과 */
+export interface SearchLogEntry {
+  glsSpaceCode: string;
+  buildingName: string;
+  roomName: string;
+  available: boolean;
+  conflicts: Array<{ kind: string; timeTerm: string; info: string }>;
+}
+
 /** 자동화 진행 상태 — popup에 표시 */
 export type AutomationStatus =
   | { kind: 'idle' }
   | { kind: 'opening_gls' }
   | { kind: 'login_required' }
-  | { kind: 'searching'; tried: number; total: number }
-  | { kind: 'candidate_found'; spaceCode: string; spaceName: string }
+  | { kind: 'searching'; tried: number; total: number; log: SearchLogEntry[] }
+  | {
+      kind: 'candidate_found';
+      spaceCode: string;
+      spaceName: string;
+      log: SearchLogEntry[];
+    }
   | { kind: 'submitting' }
   | { kind: 'done'; spaceCode: string }
-  | { kind: 'no_candidate' }
+  | { kind: 'no_candidate'; log: SearchLogEntry[] }
   | { kind: 'error'; message: string };
 
 /** 후보 공간 (서버 SpaceDto의 클라 측 alias) */

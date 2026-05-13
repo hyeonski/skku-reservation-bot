@@ -15,7 +15,7 @@ import { useConversation } from './hooks/useConversation';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
 import { DevPanel } from './components/DevPanel';
-import type { AutomationStatus, SpaceCandidate } from '../shared/types';
+import type { AutomationStatus, SpaceCandidate, SearchLogEntry } from '../shared/types';
 
 function statusLabel(status: AutomationStatus): string | null {
   switch (status.kind) {
@@ -46,6 +46,49 @@ function isActive(status: AutomationStatus): boolean {
     status.kind === 'searching' ||
     status.kind === 'candidate_found' ||
     status.kind === 'submitting'
+  );
+}
+
+function getSearchLog(status: AutomationStatus): SearchLogEntry[] {
+  if (status.kind === 'searching' || status.kind === 'candidate_found' || status.kind === 'no_candidate') {
+    return status.log;
+  }
+  return [];
+}
+
+function SearchLog({ entries }: { entries: SearchLogEntry[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="search-log">
+      {entries.map((e, i) => (
+        <div
+          key={`${e.glsSpaceCode}-${i}`}
+          className={`search-log__row search-log__row--${e.available ? 'ok' : 'bad'}`}
+        >
+          <div className="search-log__head">
+            <span className="search-log__mark">{e.available ? '✓' : '✗'}</span>
+            <span className="search-log__name">
+              {e.buildingName} {e.roomName}
+            </span>
+            <span className="search-log__code">[{e.glsSpaceCode}]</span>
+          </div>
+          {!e.available && e.conflicts.length > 0 && (
+            <ul className="search-log__conflicts">
+              {e.conflicts.slice(0, 4).map((c, j) => (
+                <li key={j}>
+                  <span className="search-log__conflict-kind">{c.kind}</span>{' '}
+                  {c.timeTerm && <span className="search-log__conflict-time">{c.timeTerm}</span>}{' '}
+                  <span className="search-log__conflict-info">{c.info.trim()}</span>
+                </li>
+              ))}
+              {e.conflicts.length > 4 && (
+                <li className="search-log__more">+{e.conflicts.length - 4}건</li>
+              )}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -103,6 +146,7 @@ export function App() {
 
   const label = statusLabel(status);
   const active = isActive(status);
+  const searchLog = getSearchLog(status);
 
   const handleOpenGls = () => {
     if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
@@ -114,6 +158,7 @@ export function App() {
 
   const footer = (
     <>
+      {searchLog.length > 0 && <SearchLog entries={searchLog} />}
       {status.kind === 'login_required' && (
         <div className="login-cta">
           <div className="login-cta__text">GLS 로그인이 필요합니다.</div>
