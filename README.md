@@ -6,6 +6,8 @@
 
 학생회·동아리 임원이 매주 반복하는 공간예약 잡무를 줄이는 게 목표입니다. 기존 GLS 시스템을 수정하지 않고 위에 지능형 레이어를 얹는 접근.
 
+현재 코드베이스 기준으로는 **Phase 1 핵심 흐름(채팅 파싱 → 후보 조회 → GLS 가용성 확인 → 폼 미리보기/실제 제출)** 과 **DevPanel 기반 자동화 검증 경로**가 구현되어 있습니다.
+
 상세 배경·로드맵: [docs/PRD.md](docs/PRD.md)
 
 ---
@@ -114,12 +116,21 @@ pnpm dev
 
 ```bash
 cd extension
-pnpm dev     # vite dev — 코드 변경 시 자동 리빌드
+pnpm build   # dist/ 생성
 ```
 
 크롬 → `chrome://extensions` → 개발자 모드 → "압축해제된 확장 프로그램을 로드합니다" → `extension/dist` 선택.
 
 브라우저 액션 아이콘 클릭 → popup 채팅창에서 사용.
+
+개발 중 popup UI만 빠르게 확인할 때는 아래 명령을 별도로 사용할 수 있습니다.
+
+```bash
+cd extension
+pnpm dev     # Vite dev server / popup 개발용
+```
+
+팝업 우측 상단 `🛠 dev` 토글을 켜면 LLM 채팅을 우회하고, `/spaces` 조회 + GLS 자동화만 검증하는 DevPanel을 사용할 수 있습니다.
 
 ---
 
@@ -129,9 +140,9 @@ pnpm dev     # vite dev — 코드 변경 시 자동 리빌드
 2. 서버 `/parse` 가 DeepSeek-Chat으로 슬롯 추출
 3. 누락 슬롯 있으면 멀티턴으로 되묻기 (D-013)
 4. 슬롯 충족 시 `/spaces` 로 후보 공간 조회 (인원·캠퍼스 필터)
-5. 확장이 GLS 탭을 열고 (또는 재사용), content script가 후보 공간을 하나씩 시간표에서 가용성 검증
-6. 가용 공간 발견 → popup에 카드로 표시 → 사용자 확인
-7. 폼 자동 작성 후 저장 클릭 → 결과 알림
+5. 확장이 현재 활성 탭을 GLS로 전환하거나, 이미 활성 GLS 탭이 있으면 재사용하고 content script가 후보 공간을 하나씩 시간표에서 가용성 검증
+6. 가용 공간 발견 → popup 카드에서 행사 메타(행사구분/주관단체/행사명/인원/사용목적) 확인 및 수정
+7. 필요하면 "폼만 채우기"로 GLS 모달 미리보기, 확인되면 실제 저장 클릭 → 완료 알림
 
 자세한 메시지 흐름은 [docs/DECISIONS.md](docs/DECISIONS.md) D-026 참조.
 
@@ -139,7 +150,7 @@ pnpm dev     # vite dev — 코드 변경 시 자동 리빌드
 
 ## P1 범위 / 비범위
 
-**포함**: 멀티턴 슬롯필링, 인원 기반 최적 후보 추천, GLS 자동 신청서 작성·제출
+**포함**: 멀티턴 슬롯필링, 인원 조건 기반 후보 조회, GLS 자동 신청서 작성·제출
 
 **제외 (Phase 2 이후)**:
 - 반려 감지·재신청 (D-011)
@@ -192,6 +203,7 @@ cd extension && pnpm exec tsc --noEmit
 | 자동화 전략 | Nexacro 컴포넌트 API + DOM cascade 클릭 |
 | 가용성 판정 | `dsGrdSub` (공간 row 클릭으로 로드) |
 | 공간 시딩 | 개발자 쿠키 주입 + Playwright 1회성 실행 |
+| 후보 순회 | 현재 구현은 서버 후보를 1회 셔플한 뒤 직렬 검증 (데모 편의상) |
 
 전체 결정 로그: [docs/DECISIONS.md](docs/DECISIONS.md) (D-001~D-028)
 
@@ -199,12 +211,13 @@ cd extension && pnpm exec tsc --noEmit
 
 ## 라이브 검증 시 다듬을 부분
 
-P1 코드는 컴파일과 단위 흐름까진 통과했지만 실제 GLS에서 검증해야 튜닝이 끝나는 항목들:
+P1 코드는 빌드와 기본 흐름 검증은 통과했지만, 실제 GLS에서 더 다듬어야 하는 항목들이 있습니다.
 
 - `clickSpaceRow` / `dismissNoticeIfShown` 정확도 — bridge `ops` 와 시딩 헬퍼에 인라인. GLS 페이지 변동 시 [extension/src/content/bridgeMainWorld.ts](extension/src/content/bridgeMainWorld.ts) + [server/scripts/scrape-spaces.ts](server/scripts/scrape-spaces.ts) 양쪽 갱신 필요.
-- 저장 후 성공/실패 감지 (5초 폴링) — 실제 GLS 응답 메시지 텍스트 확정 후 튜닝
-- 행사 메타(행사구분 코드·주관단체·사용목적) 수집 UI — popup 확인 단계에 폼 추가 필요
+- 저장 후 성공/실패 감지 (현재 `waitForSubmitResult` 5초 대기 기반) — GLS 응답 메시지 케이스를 더 수집해 튜닝 필요
+- 행사 메타 수집 UI는 popup 후보 카드에 구현됐지만, 채팅 슬롯 수집과 통합된 사전 입력 플로우는 아직 없음
 - 자연어 건물명 → `campusCode`/`buildingNo` 매핑 — DB lookup으로 보강
+- 서버에 남아 있는 `active` 대화를 다음 세션에서 복구하는 UI는 아직 없고, 현재는 popup snapshot + `chrome.storage.session` 기반 복원만 지원
 - `chrome.notifications` 아이콘 자원 추가
 
 ---
