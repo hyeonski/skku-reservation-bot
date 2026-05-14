@@ -48,6 +48,7 @@ export interface SearchLogEntry {
 /** 자동화 진행 상태 — popup에 표시 */
 export type AutomationStatus =
   | { kind: 'idle' }
+  | { kind: 'navigation_required' }
   | { kind: 'opening_gls' }
   | { kind: 'login_required' }
   | { kind: 'searching'; tried: number; total: number; log: SearchLogEntry[] }

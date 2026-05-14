@@ -47,22 +47,108 @@ export async function openReservationModal(): Promise<void> {
   const alreadyOpen = await runInPage<boolean>('hasPopupFrame');
   if (alreadyOpen) return;
 
-  try {
-    await runInPage('waitForMenuReady', { timeoutMs: 15000 });
-  } catch (e) {
-    // GLS는 같은 kingoinfo URL 내부에서 로그인 폼을 띄우는 케이스가 있다.
-    // 이 경우 menu timeout은 사실상 세션 만료이므로 명시적 sentinel로 변환.
-    if (!checkSession()) {
-      throw new Error('LOGIN_REQUIRED');
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await runInPage('waitForMenuReady', { timeoutMs: 15000 + attempt * 5000 });
+    } catch (e) {
+      // GLS는 같은 kingoinfo URL 내부에서 로그인 폼을 띄우는 케이스가 있다.
+      // 이 경우 menu timeout은 사실상 세션 만료이므로 명시적 sentinel로 변환.
+      if (!checkSession()) {
+        throw new Error('LOGIN_REQUIRED');
+      }
+      lastError = e;
+      if (attempt === 0) {
+        console.warn('[GLS-iso] waitForMenuReady timed out; retrying once');
+        await sleep(1200);
+        continue;
+      }
+      throw e;
     }
-    throw e;
+
+    try {
+      await runInPage('openReservationModal', undefined, 20000);
+      return;
+    } catch (e) {
+      lastError = e;
+      const opened = await runInPage<boolean>('hasPopupFrame');
+      if (opened) return;
+      if (attempt === 0) {
+        console.warn('[GLS-iso] reservation modal open failed; retrying once');
+        await sleep(1000);
+        continue;
+      }
+      throw e;
+    }
   }
-  await runInPage('openReservationModal', undefined, 20000);
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 // ---------- 가용성 확인 ----------
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+function makeExclusionConflict(info: string): Array<{ kind: string; timeTerm: string; info: string }> {
+  return [{ kind: '제외', timeTerm: '', info }];
+}
+
+async function chooseComboInteractionFirst(
+  suffix: string,
+  label: string,
+  fallbackValue?: string,
+): Promise<void> {
+  let selected = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    selected = await runInPage<boolean>('trySelectComboByText', { suffix, label });
+    if (selected) break;
+    await sleep(180);
+  }
+  if (!selected) {
+    if (!fallbackValue) throw new Error(`combo ${suffix} could not be selected by label: ${label}`);
+    console.log('[GLS-iso] combo label select unavailable; falling back to internal set', suffix, label);
+    await runInPage('setComboAndFireChange', { suffix, value: fallbackValue });
+  }
+  await runInPage('waitForRenderedValue', { suffix, value: label, timeoutMs: 5000 });
+}
+
+async function setDateInteractionFirst(yyyymmdd: string): Promise<void> {
+  const rendered = `${yyyymmdd.slice(0, 4)}-${yyyymmdd.slice(4, 6)}-${yyyymmdd.slice(6, 8)}`;
+  await runInPage('selectCalendarDate', {
+    suffix: 'calUseDt',
+    yyyymmdd,
+    timeoutMs: 6000,
+  });
+  await runInPage('waitForRenderedValue', {
+    suffix: 'calUseDt',
+    value: rendered,
+    timeoutMs: 4000,
+    contains: true,
+  });
+}
+
+async function alignCandidateContext(
+  candidate: SpaceCandidate,
+  yyyymmdd: string,
+  attempt: number,
+): Promise<void> {
+  console.log('[GLS-iso] step: choose campus', candidate.campusCode, `(${candidate.campusName})`);
+  await chooseComboInteractionFirst('cboCampusCd', candidate.campusName, candidate.campusCode);
+
+  console.log('[GLS-iso] step: choose building', candidate.buildingNo, `(${candidate.buildingName})`);
+  await chooseComboInteractionFirst('cboBuildCd', candidate.buildingName, candidate.buildingNo);
+
+  console.log('[GLS-iso] step: set rendered date', yyyymmdd);
+  await setDateInteractionFirst(yyyymmdd);
+  await sleep(attempt === 0 ? 250 : 500);
+
+  if (attempt > 0) {
+    // 간헐적으로 date 반영 직후 건물 기준 공간 목록이 늦게 갱신된다.
+    // 같은 상호작용을 한 번 더 수행해 cascaded dataset refresh를 유도한다.
+    console.warn('[GLS-iso] re-aligning building after slow dsCboSpace refresh');
+    await chooseComboInteractionFirst('cboBuildCd', candidate.buildingName, candidate.buildingNo);
+    await sleep(350);
+  }
+}
 
 export async function checkAvailability(
   candidate: SpaceCandidate,
@@ -73,51 +159,73 @@ export async function checkAvailability(
     formData?: ReservationFormData;
     startTime?: string;
     endTime?: string;
+    strictPreview?: boolean;
   },
 ): Promise<{
   available: boolean;
   conflicts: Array<{ kind: string; timeTerm: string; info: string }>;
 }> {
   console.log('[GLS-iso] checkAvailability start', candidate.glsSpaceCode, date, startHour, endHour);
-  await openReservationModal();
+  try {
+    await openReservationModal();
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (message.includes('reservation modal did not open')) {
+      console.warn('[GLS-iso] reservation modal did not open; retrying once');
+      await sleep(700);
+      await openReservationModal();
+    } else {
+      throw e;
+    }
+  }
   const yyyymmdd = toYyyymmdd(date);
 
-  // 캠퍼스 / 건물 cascade — code 값을 직접 set 하고 OnChanged 명시 호출.
-  console.log('[GLS-iso] step: set campus', candidate.campusCode, `(${candidate.campusName})`);
-  await runInPage('setComboAndFireChange', {
-    suffix: 'cboCampusCd',
-    value: candidate.campusCode,
-  });
+  let datasetMessage = '';
+  let datasetReady = false;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await alignCandidateContext(candidate, yyyymmdd, attempt);
+    try {
+      await runInPage('waitForDatasetValue', {
+        dsName: 'dsCboSpace',
+        column: 'GU_SPACE_CD',
+        value: candidate.glsSpaceCode,
+        timeoutMs: attempt === 0 ? 4000 : 7000,
+      });
+      datasetReady = true;
+      break;
+    } catch (datasetErr) {
+      datasetMessage = datasetErr instanceof Error ? datasetErr.message : String(datasetErr);
+      if (attempt === 0) {
+        console.warn('[GLS-iso] dsCboSpace did not contain candidate after first pass; retrying context sync');
+        await runInPage('dismissNoticeIfShown');
+        await sleep(500);
+        continue;
+      }
+    }
+  }
+  if (!datasetReady) {
+    return {
+      available: false,
+      conflicts: makeExclusionConflict(
+        `공간 옵션 로드 실패: 후보 공간 코드가 공간 목록(dsCboSpace)에 나타나지 않았습니다. 캠퍼스/건물/날짜 문맥이 아직 맞지 않았을 수 있습니다. (${datasetMessage})`,
+      ),
+    };
+  }
 
-  // 캠퍼스 cascade transaction 이 끝나서 dsCboBuildCd 에 target buildingNo row 가
-  // 나타날 때까지 대기. set_value 가 dataset 매칭 row 를 찾지 못하면 text 가 빈칸으로
-  // 표시되는 현상이 있어 (검증 2026-05-13), 폴링 필수.
-  console.log('[GLS-iso] waiting for dsCboBuildCd to load', candidate.buildingNo);
-  await runInPage('waitForDatasetValue', {
-    dsName: 'dsCboBuildCd',
-    column: 'BUILD_NO',
-    value: candidate.buildingNo,
-    timeoutMs: 5000,
-  });
-
-  console.log('[GLS-iso] step: prime calUseDt', yyyymmdd);
-  await runInPage('setComponentValue', { suffix: 'calUseDt', value: yyyymmdd });
-  await sleep(200);
-
-  console.log('[GLS-iso] step: set building', candidate.buildingNo, `(${candidate.buildingName})`);
-  await runInPage('setComboAndFireChange', {
-    suffix: 'cboBuildCd',
-    value: candidate.buildingNo,
-  });
-
-  // 건물 cascade 후 dsCboSpace 에 target glsSpaceCode 가 들어올 때까지 대기.
-  console.log('[GLS-iso] waiting for dsCboSpace to load', candidate.glsSpaceCode);
-  await runInPage('waitForDatasetValue', {
-    dsName: 'dsCboSpace',
-    column: 'GU_SPACE_CD',
-    value: candidate.glsSpaceCode,
-    timeoutMs: 5000,
-  });
+  try {
+    await runInPage('waitForGridSpaceCode', {
+      spaceCode: candidate.glsSpaceCode,
+      timeoutMs: 5000,
+    });
+  } catch (gridErr) {
+    const gridMessage = gridErr instanceof Error ? gridErr.message : String(gridErr);
+    return {
+      available: false,
+      conflicts: makeExclusionConflict(
+        `시간표 미노출: 후보 공간 코드가 현재 시간표(dsGrdMainNew)에 나타나지 않았습니다. 건물/날짜 변경 반영이 늦었거나 다른 건물 데이터가 남아 있을 수 있습니다. (${gridMessage})`,
+      ),
+    };
+  }
 
   // 공간 row 클릭 → dsGrdSub 갱신 + cboSpaceCd auto-set
   console.log('[GLS-iso] step: click space row', candidate.glsSpaceCode);
@@ -125,20 +233,32 @@ export async function checkAvailability(
     await runInPage('clickSpaceRow', { glsSpaceCode: candidate.glsSpaceCode });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    if (message.includes('not in dsGrdMainNew')) {
-      console.warn('[GLS-iso] space not rendered in dsGrdMainNew; treating as unavailable');
+    if (message.includes('grdCal cell not found')) {
       return {
         available: false,
-        conflicts: [
-          {
-            kind: '제외',
-            timeTerm: '',
-            info: 'GLS 시간표에 표시되지 않아 이번 요청에서는 제외했습니다.',
-          },
-        ],
+        conflicts: makeExclusionConflict(
+          `시간표 렌더 실패: 공간 행은 찾았지만 클릭할 셀 DOM이 렌더되지 않았습니다. 가상 스크롤 상태일 수 있습니다. (${message})`,
+        ),
+      };
+    }
+    if (message.includes('not in dsGrdMainNew')) {
+      return {
+        available: false,
+        conflicts: makeExclusionConflict(
+          `시간표 미노출: 후보 공간 행이 시간표(dsGrdMainNew)에 나타나지 않았습니다. (${message})`,
+        ),
       };
     }
     throw e;
+  }
+  try {
+    await runInPage('waitForSpaceFieldSelection', {
+      spaceCode: candidate.glsSpaceCode,
+      roomName: candidate.roomName,
+      timeoutMs: 5000,
+    });
+  } catch (err) {
+    console.warn('[GLS-iso] space field did not reflect after row click; continuing with dsGrdSub read', err);
   }
   await sleep(800);
 
@@ -162,8 +282,10 @@ export async function checkAvailability(
         startTime: options.startTime ? toHHMM(options.startTime) : '',
         endTime: options.endTime ? toHHMM(options.endTime) : '',
         formData: options.formData,
+        primed: true,
       });
     } catch (e) {
+      if (options.strictPreview) throw e;
       console.warn('[GLS-iso] fillForm preview failed (non-fatal):', e);
     }
   }
@@ -247,13 +369,19 @@ export async function submitReservation(
       startTime: startHHMM,
       endTime: endHHMM,
       formData,
+      primed: false,
     });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   try {
-    await runInPage('submitReservation');
+    try {
+      await runInPage('clickSaveButton');
+    } catch (err) {
+      console.warn('[GLS-iso] visible save click failed; falling back to btnSave_OnClick', err);
+      await runInPage('submitReservation');
+    }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

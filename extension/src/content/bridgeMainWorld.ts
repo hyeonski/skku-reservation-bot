@@ -27,6 +27,251 @@ declare global {
 
   const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+  function isVisible(el: Element | null): el is HTMLElement {
+    return !!el
+      && el instanceof HTMLElement
+      && (el.offsetParent !== null || el.getClientRects().length > 0);
+  }
+
+  const FIELD_LABEL_META: Record<string, { label: string; occurrence?: number }> = {
+    cboHangsaGb: { label: '행사구분' },
+    edtSinchungGroup: { label: '주관단체' },
+    edtSinchungEvent: { label: '행사명' },
+    edtUseNum: { label: '행사인원' },
+    cboCampusCd: { label: '캠퍼스' },
+    cboBuildCd: { label: '건물' },
+    calUseDt: { label: '예약날짜' },
+    cboSpaceCd: { label: '공간' },
+    cboResStTime: { label: '예약시간', occurrence: 0 },
+    cboResEdTime: { label: '예약시간', occurrence: 1 },
+    TextArea00: { label: '사용목적' },
+  };
+
+  function popupDomPrefix(): string {
+    return popupPrefix();
+  }
+
+  function isInActivePopup(el: Element): boolean {
+    const prefix = popupDomPrefix();
+    let cur: HTMLElement | null = el as HTMLElement;
+    while (cur) {
+      if (typeof cur.id === 'string' && cur.id.startsWith(prefix)) return true;
+      cur = cur.parentElement;
+    }
+    return false;
+  }
+
+  function controlValue(el: Element | null): string {
+    if (!el) return '';
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      return String(el.value ?? '').trim();
+    }
+    return String((el as HTMLElement).innerText || (el as HTMLElement).textContent || '').trim();
+  }
+
+  function normalizeLabel(value: string): string {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  function digitsOnly(value: string): string {
+    return String(value ?? '').replace(/\D/g, '');
+  }
+
+  function normalizeSpaceText(value: string): string {
+    return String(value ?? '')
+      .replace(/\[[^\]]+\]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  const LOADING_HINTS = [
+    '조회 중',
+    '로딩 중',
+    '처리 중',
+    '잠시만',
+    'Loading',
+    'loading',
+  ];
+
+  function visibleTextSnapshot(limit = 24): string {
+    const texts = visibleTextNodes()
+      .map((node) => String(node.innerText || node.textContent || '').trim())
+      .filter(Boolean)
+      .slice(0, limit);
+    return texts.join('|');
+  }
+
+  function readLoadingHint(): string {
+    if (String(document.body.style.cursor || '').includes('wait')) return 'cursor:wait';
+    const nodes = document.querySelectorAll<HTMLElement>('div, span, p, button');
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const text = String(node.innerText || node.textContent || '').trim();
+      if (!text) continue;
+      const hit = LOADING_HINTS.find((hint) => text.includes(hint));
+      if (hit) return hit;
+    }
+    const loadingId = Array.from(document.querySelectorAll<HTMLElement>('[id]'))
+      .find((node) => isVisible(node) && /(loading|progress|wait|mask)/i.test(node.id));
+    if (loadingId) return `id:${loadingId.id}`;
+    return '';
+  }
+
+  function readDatasetSignature(ds: any, keyColumn?: string): string {
+    if (!ds || typeof ds.getRowCount !== 'function') return 'missing';
+    const rowCount = ds.getRowCount();
+    const sample: string[] = [];
+    for (let i = 0; i < Math.min(rowCount, 3); i++) {
+      sample.push(String(keyColumn ? ds.getColumn(i, keyColumn) : i));
+    }
+    for (let i = Math.max(3, rowCount - 2); i < rowCount; i++) {
+      sample.push(String(keyColumn ? ds.getColumn(i, keyColumn) : i));
+    }
+    return `${rowCount}:${sample.join(',')}`;
+  }
+
+  function shouldKeepWaiting(
+    now: number,
+    softDeadline: number,
+    hardDeadline: number,
+    lastActivityAt: number,
+    loadingHint: string,
+    quietWindowMs: number,
+  ): boolean {
+    if (now < softDeadline) return true;
+    if (now >= hardDeadline) return false;
+    if (loadingHint) return true;
+    return now - lastActivityAt < quietWindowMs;
+  }
+
+  function visibleFormControls(): Array<HTMLInputElement | HTMLTextAreaElement> {
+    return Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'))
+      .filter((el) => isVisible(el) && isInActivePopup(el));
+  }
+
+  function findControlsNearLabel(suffix: string): Array<HTMLInputElement | HTMLTextAreaElement> {
+    const meta = FIELD_LABEL_META[suffix];
+    if (!meta) return [];
+    const labels = Array.from(document.querySelectorAll<HTMLElement>('div, span, p'))
+      .filter((el) => isVisible(el) && isInActivePopup(el))
+      .filter((el) => String(el.innerText || el.textContent || '').trim() === meta.label);
+    if (labels.length === 0) return [];
+
+    const controls = visibleFormControls();
+    const scored: Array<{
+      control: HTMLInputElement | HTMLTextAreaElement;
+      score: number;
+    }> = [];
+
+    for (const labelEl of labels) {
+      const lr = labelEl.getBoundingClientRect();
+      for (const control of controls) {
+        const cr = control.getBoundingClientRect();
+        const sameRow = cr.left >= lr.right - 30 && Math.abs(cr.top - lr.top) < 60;
+        const belowLabel =
+          cr.top >= lr.bottom - 10 &&
+          cr.top < lr.bottom + 220 &&
+          Math.abs(cr.left - lr.left) < 260;
+        if (!sameRow && !belowLabel) continue;
+        const dx = Math.max(0, cr.left - lr.right);
+        const dy = sameRow ? Math.abs(cr.top - lr.top) : Math.abs(cr.top - lr.bottom) + 80;
+        const penalty = control instanceof HTMLTextAreaElement ? 5 : 0;
+        scored.push({ control, score: dy * 1000 + dx + penalty });
+      }
+    }
+
+    return scored
+      .sort((a, b) => a.score - b.score)
+      .map((entry) => entry.control)
+      .filter((control, index, arr) => arr.indexOf(control) === index);
+  }
+
+  function labeledControlForSuffix(suffix: string): HTMLInputElement | HTMLTextAreaElement | null {
+    const matches = findControlsNearLabel(suffix);
+    if (matches.length === 0) return null;
+    const occurrence = FIELD_LABEL_META[suffix]?.occurrence ?? 0;
+    return matches[occurrence] ?? matches[0] ?? null;
+  }
+
+  function popupFilledTextColor(): string {
+    const comboRoot = byPopupSuffix('cboCampusCd');
+    const comboText =
+      comboRoot?.querySelector<HTMLElement>('[id$=":text"], [id*=":text"]') ??
+      null;
+    const sample = comboText && isVisible(comboText) ? comboText : document.body;
+    return window.getComputedStyle(sample).color || 'rgb(51, 51, 51)';
+  }
+
+  function applyFilledVisualState(
+    el: HTMLElement,
+    value: string,
+    opts?: { multiline?: boolean },
+  ): void {
+    if (!String(value).trim()) return;
+    const color = popupFilledTextColor();
+    el.style.color = color;
+    (el.style as any).webkitTextFillColor = color;
+    el.style.opacity = '1';
+    if (opts?.multiline) {
+      el.style.textAlign = 'left';
+    }
+  }
+
+  function setControlValueLikeUser(
+    control: HTMLInputElement | HTMLTextAreaElement,
+    value: string,
+  ): void {
+    control.focus();
+    control.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+    control.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+
+    const proto =
+      control instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (valueSetter) {
+      valueSetter.call(control, '');
+    } else {
+      control.value = '';
+    }
+    control.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+      data: null,
+    }));
+    control.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+      data: null,
+    }));
+
+    if (valueSetter) {
+      valueSetter.call(control, value);
+    } else {
+      control.value = value;
+    }
+    control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Process' }));
+    control.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: value,
+    }));
+    control.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'insertText',
+      data: value,
+    }));
+    control.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Process' }));
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+    control.blur();
+    control.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    control.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    applyFilledVisualState(control, value, {
+      multiline: control instanceof HTMLTextAreaElement,
+    });
+  }
+
   function nexClick(el: Element): void {
     const r = el.getBoundingClientRect();
     const x = r.left + r.width / 2;
@@ -47,12 +292,202 @@ declare global {
     );
   }
 
+  function byPopupSuffix(suffix: string): HTMLElement | null {
+    return document.querySelector<HTMLElement>(
+      `div[id^="${popupPrefix()}"][id$=".${suffix}"]:not([id$=":icontext"])`,
+    );
+  }
+
+  function renderedValueForSuffix(suffix: string): string {
+    const root = byPopupSuffix(suffix);
+    const labeledControl = labeledControlForSuffix(suffix);
+    if (labeledControl) {
+      const value = controlValue(labeledControl);
+      if (value) return value;
+    }
+    if (!root) return '';
+    const controls = Array.from(
+      root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+    ).filter(isVisible);
+    const control = controls[0] ?? null;
+    if (control) return controlValue(control);
+    const textNodes = Array.from(
+      root.querySelectorAll<HTMLElement>('[id$=":text"], [id*=":text"]'),
+    ).filter(isVisible);
+    const textEl = textNodes[0] ?? null;
+    if (textEl) return controlValue(textEl);
+    return isVisible(root) ? controlValue(root) : '';
+  }
+
+  function renderedTargetsForSuffix(
+    suffix: string,
+  ): Array<HTMLElement | HTMLInputElement | HTMLTextAreaElement> {
+    const targets: Array<HTMLElement | HTMLInputElement | HTMLTextAreaElement> = [];
+    const labeledControl = labeledControlForSuffix(suffix);
+    if (labeledControl) targets.push(labeledControl);
+
+    const root = byPopupSuffix(suffix);
+    if (!root) return targets;
+
+    const controls = Array.from(
+      root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+    ).filter(isVisible);
+    targets.push(...controls);
+
+    const textNodes = Array.from(
+      root.querySelectorAll<HTMLElement>('[id$=":text"], [id*=":text"]'),
+    ).filter(isVisible);
+    targets.push(...textNodes);
+
+    if (isVisible(root)) targets.push(root);
+    return targets.filter((target, index, arr) => arr.indexOf(target) === index);
+  }
+
+  function syncRenderedValueForSuffix(suffix: string, value: string): void {
+    const targets = renderedTargetsForSuffix(suffix);
+    for (const target of targets) {
+      if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
+        applyFilledVisualState(target, value, {
+          multiline: target instanceof HTMLTextAreaElement,
+        });
+        continue;
+      }
+      applyFilledVisualState(target, value, {
+        multiline: target.tagName === 'TEXTAREA',
+      });
+    }
+  }
+
   function findByText(text: string): HTMLElement | null {
     const divs = document.querySelectorAll<HTMLElement>('div');
     for (const d of divs) {
       if (d.offsetParent !== null && d.innerText && d.innerText.trim() === text) return d;
     }
     return null;
+  }
+
+  function findVisibleTextInPopup(text: string): HTMLElement | null {
+    const nodes = document.querySelectorAll<HTMLElement>('div, span, p, button');
+    for (const node of nodes) {
+      if (!isVisible(node) || !isInActivePopup(node)) continue;
+      if (String(node.innerText || node.textContent || '').trim() === text) return node;
+    }
+    return null;
+  }
+
+  function hasVisibleTextContaining(text: string): boolean {
+    const nodes = document.querySelectorAll<HTMLElement>('div, textarea, span, p');
+    for (const node of nodes) {
+      const value =
+        node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+          ? node.value
+          : '';
+      const content = (node.innerText || node.textContent || value || '').trim();
+      if (!content) continue;
+      if (node.offsetParent === null && !content.includes(text)) continue;
+      if (content.includes(text)) return true;
+    }
+    return false;
+  }
+
+  function readBlockingAlertText(): string {
+    const nodes = document.querySelectorAll<HTMLElement>('div, textarea, span, p');
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const content = String(node.innerText || node.textContent || '').trim();
+      if (!content) continue;
+      if (
+        content.includes('먼저 선택 하세요') ||
+        content.includes('먼저 선택하세요')
+      ) {
+        return content;
+      }
+    }
+    return '';
+  }
+
+  function clickVisibleThing(el: HTMLElement): void {
+    nexClick(el);
+  }
+
+  function visibleTextNodes(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>('div, span, p, button'))
+      .filter(isVisible);
+  }
+
+  function findCalendarPopup(): { panel: HTMLElement; year: number; month: number } | null {
+    const nodes = visibleTextNodes();
+    const yearNodes = nodes.filter((node) => /^\d{4}\.$/.test(String(node.innerText || node.textContent || '').trim()));
+    for (const yearNode of yearNodes) {
+      const yearText = String(yearNode.innerText || yearNode.textContent || '').trim();
+      const yearRect = yearNode.getBoundingClientRect();
+      const monthNode = nodes.find((node) => {
+        if (node === yearNode) return false;
+        const text = String(node.innerText || node.textContent || '').trim();
+        if (!/^\d{1,2}$/.test(text)) return false;
+        const rect = node.getBoundingClientRect();
+        return Math.abs(rect.top - yearRect.top) < 18 && rect.left > yearRect.right - 10 && rect.left < yearRect.right + 80;
+      });
+      if (!monthNode) continue;
+
+      let panel: HTMLElement | null = yearNode;
+      while (panel && panel !== document.body) {
+        const rect = panel.getBoundingClientRect();
+        if (rect.width >= 120 && rect.height >= 120) {
+          const dayTexts = Array.from(panel.querySelectorAll<HTMLElement>('div, span, p'))
+            .map((el) => String(el.innerText || el.textContent || '').trim())
+            .filter((text) => /^\d{1,2}$/.test(text));
+          if (dayTexts.length >= 20) {
+            return {
+              panel,
+              year: parseInt(yearText.replace('.', ''), 10),
+              month: parseInt(String(monthNode.innerText || monthNode.textContent || '').trim(), 10),
+            };
+          }
+        }
+        panel = panel.parentElement;
+      }
+    }
+    return null;
+  }
+
+  async function waitForCalendarPopup(timeoutMs = 3000): Promise<{ panel: HTMLElement; year: number; month: number }> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const popup = findCalendarPopup();
+      if (popup) return popup;
+      await wait(100);
+    }
+    throw new Error(`calendar popup not visible within ${timeoutMs}ms`);
+  }
+
+  function findCalendarDayCell(panel: HTMLElement, day: number): HTMLElement | null {
+    const panelRect = panel.getBoundingClientRect();
+    const candidates = Array.from(panel.querySelectorAll<HTMLElement>('div, span, p'))
+      .filter(isVisible)
+      .filter((el) => {
+        const text = String(el.innerText || el.textContent || '').trim();
+        if (text !== String(day)) return false;
+        const rect = el.getBoundingClientRect();
+        return rect.top > panelRect.top + 28 && rect.left >= panelRect.left && rect.right <= panelRect.right;
+      })
+      .sort((a, b) => {
+        const ar = a.getBoundingClientRect();
+        const br = b.getBoundingClientRect();
+        return ar.top - br.top || ar.left - br.left;
+      });
+    return candidates[0] ?? null;
+  }
+
+  function clickCalendarArrow(panel: HTMLElement, direction: 'prev' | 'next'): void {
+    const rect = panel.getBoundingClientRect();
+    const x = direction === 'prev' ? rect.left + 14 : rect.right - 18;
+    const y = rect.top + 18;
+    const target = document.elementFromPoint(x, y) as HTMLElement | null;
+    if (!target || !isVisible(target)) {
+      throw new Error(`calendar ${direction} arrow not clickable`);
+    }
+    clickVisibleThing(target);
   }
 
   function topFrame(): any | null {
@@ -62,29 +497,44 @@ declare global {
     return top ?? null;
   }
 
-  function popupKey(): string | null {
+  function popupFrameEntry(): { key: string; frame: any } | null {
     const top = topFrame();
     if (!top) return null;
     const keys = Object.keys(top).filter((k) => k.startsWith('popupFrame'));
-    return keys.length > 0 ? keys[keys.length - 1] : null;
+    for (let i = keys.length - 1; i >= 0; i--) {
+      const key = keys[i];
+      const frame = top[key];
+      if (frame && typeof frame === 'object') {
+        return { key, frame };
+      }
+    }
+    return null;
+  }
+
+  function popupKey(): string | null {
+    return popupFrameEntry()?.key ?? null;
   }
 
   function popupPrefix(): string {
-    const k = popupKey();
-    if (!k) throw new Error('no popupFrame open');
-    return `mainframe.TopFrame.${k}.`;
+    const entry = popupFrameEntry();
+    if (!entry) throw new Error('no popupFrame open');
+    return `mainframe.TopFrame.${entry.key}.`;
   }
 
   function activePopupForm(): any {
-    const k = popupKey();
-    if (!k) throw new Error('no popupFrame open');
-    const top = topFrame();
-    if (!top) throw new Error('TopFrame not ready');
-    return top[k].form;
+    const entry = popupFrameEntry();
+    if (!entry) throw new Error('no popupFrame open');
+    const form = entry.frame?.form;
+    if (!form) throw new Error(`popupFrame ${entry.key} form not ready`);
+    return form;
   }
 
   function activeModalDM(): any {
-    return activePopupForm().divManage.form;
+    const popupForm = activePopupForm();
+    const divManage = popupForm?.divManage;
+    const form = divManage?.form;
+    if (!form) throw new Error('popup divManage form not ready');
+    return form;
   }
 
   function readDataset(form: any, dsName: string): Record<string, unknown>[] {
@@ -104,6 +554,16 @@ declare global {
     return rows;
   }
 
+  function readGridSpaceCodes(): string[] {
+    const ds = activePopupForm().dsGrdMainNew;
+    if (!ds || typeof ds.getRowCount !== 'function') return [];
+    const avail: string[] = [];
+    for (let i = 0; i < ds.getRowCount(); i++) {
+      avail.push(String(ds.getColumn(i, 'GU_SPACE_CD')));
+    }
+    return avail;
+  }
+
   // ---------- 자동화 named operations ----------
 
   const ops: Record<string, (args?: any) => unknown | Promise<unknown>> = {
@@ -113,9 +573,14 @@ declare global {
      * Nexacro 앱 + 상단 메뉴(`btnM532010000`) 가 가시 상태일 때까지 대기.
      * 새 탭 첫 진입 시 페이지 렌더링이 늦어 byIdSuffix 가 null 반환하는 케이스 대비.
      */
-    waitForMenuReady: async ({ timeoutMs = 15000 } = {}): Promise<true> => {
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
+    waitForMenuReady: async ({ timeoutMs = 15000, hardTimeoutMs, quietWindowMs = 1500 } = {}): Promise<true> => {
+      const softDeadline = Date.now() + timeoutMs;
+      const hardDeadline = Date.now() + (hardTimeoutMs ?? Math.max(timeoutMs + 10000, timeoutMs * 2));
+      let lastActivityAt = Date.now();
+      let lastSignature = '';
+      let extendedLogged = false;
+      while (true) {
+        const now = Date.now();
         try {
           if (topFrame()) {
             const menu = byIdSuffix('btnM532010000');
@@ -124,9 +589,20 @@ declare global {
         } catch (_) {
           /* nexacro not ready */
         }
+        const signature = `${topFrame() ? 'ready' : 'boot'}:${document.querySelectorAll('[id^="mainframe.TopFrame"]').length}:${visibleTextSnapshot(12)}`;
+        if (signature !== lastSignature) {
+          lastSignature = signature;
+          lastActivityAt = now;
+        }
+        const loadingHint = readLoadingHint();
+        if (now >= softDeadline && !extendedLogged && shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) {
+          console.log('[GLS] waitForMenuReady soft-timeout extended', loadingHint || 'activity');
+          extendedLogged = true;
+        }
+        if (!shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) break;
         await wait(200);
       }
-      throw new Error('Nexacro menu not visible after ' + timeoutMs + 'ms');
+      throw new Error('Nexacro menu not visible after soft/hard timeout');
     },
 
     /**
@@ -216,9 +692,95 @@ declare global {
         await wait(200);
       }
       if (!drop) throw new Error('dropbutton not found: ' + dropSel);
+      const itemSel = `div[id^="${prefix}"][id*=".${suffix}.combolist.item_"]`;
+      const deadline = Date.now() + 4200;
+      let target: HTMLElement | null = null;
+      let snap: HTMLElement[] = [];
+      while (Date.now() < deadline) {
+        nexClick(drop);
+        const attemptDeadline = Date.now() + 1200;
+        while (Date.now() < attemptDeadline) {
+          snap = Array.from(document.querySelectorAll<HTMLElement>(itemSel)).filter(
+            (d) => !d.id.endsWith(':text') && isVisible(d),
+          );
+          const normalizedLabel = normalizeLabel(label);
+          target =
+            snap.find((it) => normalizeLabel(it.innerText) === normalizedLabel) ??
+            snap.find((it) => normalizeLabel(it.innerText).includes(normalizedLabel)) ??
+            null;
+          if (target) break;
+          await wait(120);
+        }
+        if (target) break;
+        await wait(180);
+      }
+      if (!target) {
+        const avail = snap.map((i) => normalizeLabel(i.innerText)).join(', ');
+        throw new Error(`combo ${suffix} option not found: "${label}". Available: ${avail}`);
+      }
+      console.log('[GLS] selectComboByText ✓', suffix, '=', label);
+      nexClick(target);
+      return true;
+    },
+
+    /**
+     * selectComboByText 의 비예외 버전.
+     * 옵션이 아직 안 떴거나 렌더 race 가 있으면 false 로 돌려 fallback 경로를 탄다.
+     */
+    trySelectComboByText: async (
+      args: { suffix: string; label: string },
+    ): Promise<boolean> => {
+      try {
+        await ops.selectComboByText(args);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    /**
+     * 공간 콤보는 set_value(code)만으로는 표시 텍스트가 "선택"에 머무는 케이스가 있어
+     * 실제 dropdown item 클릭으로 커밋한다.
+     */
+    selectSpaceByCode: async (
+      args: { spaceCode: string; roomName: string },
+    ): Promise<true> => {
+      const currentText = renderedValueForSuffix('cboSpaceCd');
+      const normalizedCurrent = normalizeSpaceText(currentText);
+      const normalizedRoom = normalizeSpaceText(args.roomName);
+      if (
+        currentText.includes(args.spaceCode) ||
+        normalizedCurrent.includes(normalizedRoom)
+      ) {
+        console.log('[GLS] selectSpaceByCode already selected', currentText);
+        return true;
+      }
+
+      const pf = activePopupForm();
+      const ds = pf.dsCboSpace;
+      let label = args.roomName;
+      if (ds && typeof ds.getRowCount === 'function') {
+        for (let i = 0; i < ds.getRowCount(); i++) {
+          if (String(ds.getColumn(i, 'GU_SPACE_CD')) === String(args.spaceCode)) {
+            label = String(ds.getColumn(i, 'SPACE_NM') ?? args.roomName).trim();
+            break;
+          }
+        }
+      }
+
+      const prefix = popupPrefix();
+      const dropSel = `div[id^="${prefix}"][id$=".cboSpaceCd.dropbutton"]:not([id$=":icontext"])`;
+      let drop: HTMLElement | null = null;
+      const dropDeadline = Date.now() + 5000;
+      while (Date.now() < dropDeadline) {
+        drop = document.querySelector<HTMLElement>(dropSel);
+        if (drop && drop.offsetParent !== null) break;
+        await wait(200);
+      }
+      if (!drop) throw new Error('space dropbutton not found');
       nexClick(drop);
 
-      const itemSel = `div[id^="${prefix}"][id*=".${suffix}.combolist.item_"]`;
+      const itemSel = `div[id^="${prefix}"][id*=".cboSpaceCd.combolist.item_"]`;
       const deadline = Date.now() + 3000;
       let target: HTMLElement | null = null;
       let snap: HTMLElement[] = [];
@@ -226,17 +788,32 @@ declare global {
         snap = Array.from(document.querySelectorAll<HTMLElement>(itemSel)).filter(
           (d) => !d.id.endsWith(':text'),
         );
-        target = snap.find((it) => it.innerText.trim() === label) ?? null;
+        target =
+          snap.find((it) => it.innerText.trim() === label) ??
+          snap.find((it) => it.innerText.trim().includes(args.spaceCode)) ??
+          snap.find((it) => it.innerText.trim().includes(args.roomName)) ??
+          null;
         if (target) break;
         await wait(150);
       }
       if (!target) {
         const avail = snap.map((i) => i.innerText.trim()).join(', ');
-        throw new Error(`combo ${suffix} option not found: "${label}". Available: ${avail}`);
+        throw new Error(`space option not found for ${args.spaceCode}/${args.roomName}. Available: ${avail}`);
       }
-      console.log('[GLS] selectComboByText ✓', suffix, '=', label);
+      console.log('[GLS] selectSpaceByCode ✓', args.spaceCode, label);
       nexClick(target);
       return true;
+    },
+
+    trySelectSpaceByCode: async (
+      args: { spaceCode: string; roomName: string },
+    ): Promise<boolean> => {
+      try {
+        await ops.selectSpaceByCode(args);
+        return true;
+      } catch {
+        return false;
+      }
     },
 
     /**
@@ -248,10 +825,19 @@ declare global {
       column: string;
       value: string;
       timeoutMs?: number;
+      hardTimeoutMs?: number;
+      quietWindowMs?: number;
     }): Promise<true> => {
       const timeoutMs = args.timeoutMs ?? 5000;
-      const deadline = Date.now() + timeoutMs;
-      while (Date.now() < deadline) {
+      const hardTimeoutMs = args.hardTimeoutMs ?? Math.max(timeoutMs + 5000, timeoutMs * 2);
+      const quietWindowMs = args.quietWindowMs ?? 1200;
+      const softDeadline = Date.now() + timeoutMs;
+      const hardDeadline = Date.now() + hardTimeoutMs;
+      let lastActivityAt = Date.now();
+      let lastSignature = '';
+      let extendedLogged = false;
+      while (true) {
+        const now = Date.now();
         try {
           const ds = activePopupForm()[args.dsName];
           if (ds && typeof ds.getRowCount === 'function') {
@@ -261,12 +847,63 @@ declare global {
                 return true;
               }
             }
+            const signature = readDatasetSignature(ds, args.column);
+            if (signature !== lastSignature) {
+              lastSignature = signature;
+              lastActivityAt = now;
+            }
           }
         } catch (_) { /* dataset not ready */ }
+        const loadingHint = readLoadingHint();
+        if (now >= softDeadline && !extendedLogged && shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) {
+          console.log('[GLS] waitForDatasetValue soft-timeout extended', args.dsName, loadingHint || 'activity');
+          extendedLogged = true;
+        }
+        if (!shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) break;
         await wait(200);
       }
       throw new Error(
-        `dataset ${args.dsName}.${args.column} did not contain "${args.value}" within ${timeoutMs}ms`,
+        `dataset ${args.dsName}.${args.column} did not contain "${args.value}" within soft=${timeoutMs}ms hard=${hardTimeoutMs}ms`,
+      );
+    },
+
+    waitForGridSpaceCode: async (args: {
+      spaceCode: string;
+      timeoutMs?: number;
+      hardTimeoutMs?: number;
+      quietWindowMs?: number;
+    }): Promise<true> => {
+      const timeoutMs = args.timeoutMs ?? 5000;
+      const hardTimeoutMs = args.hardTimeoutMs ?? Math.max(timeoutMs + 5000, timeoutMs * 2);
+      const quietWindowMs = args.quietWindowMs ?? 1200;
+      const softDeadline = Date.now() + timeoutMs;
+      const hardDeadline = Date.now() + hardTimeoutMs;
+      let lastActivityAt = Date.now();
+      let lastSignature = '';
+      let extendedLogged = false;
+      while (true) {
+        const now = Date.now();
+        const avail = readGridSpaceCodes();
+        if (avail.includes(String(args.spaceCode))) {
+          console.log('[GLS] waitForGridSpaceCode ✓', args.spaceCode);
+          return true;
+        }
+        const signature = avail.join(',');
+        if (signature !== lastSignature) {
+          lastSignature = signature;
+          lastActivityAt = now;
+        }
+        const loadingHint = readLoadingHint();
+        if (now >= softDeadline && !extendedLogged && shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) {
+          console.log('[GLS] waitForGridSpaceCode soft-timeout extended', args.spaceCode, loadingHint || 'activity');
+          extendedLogged = true;
+        }
+        if (!shouldKeepWaiting(now, softDeadline, hardDeadline, lastActivityAt, loadingHint, quietWindowMs)) break;
+        await wait(150);
+      }
+      const avail = readGridSpaceCodes();
+      throw new Error(
+        `space ${args.spaceCode} not in dsGrdMainNew after soft=${timeoutMs}ms hard=${hardTimeoutMs}ms. Available: [${avail.join(',')}]`,
       );
     },
 
@@ -308,7 +945,195 @@ declare global {
       const dm = activeModalDM();
       const cmp = dm[args.suffix];
       if (!cmp) throw new Error('component not found: ' + args.suffix);
-      cmp.set_value(String(args.value));
+      const value = String(args.value);
+      cmp.set_value(value);
+      syncRenderedValueForSuffix(args.suffix, value);
+      return true;
+    },
+
+    /**
+     * 값 set 후 change handler 가 있으면 best-effort로 호출.
+     * 행사구분은 예외적으로 `fn_cboHangsaGb_onChanged` 이름을 사용한다.
+     */
+    setComponentValueAndFireChange: (
+      args: { suffix: string; value: string | number },
+    ): true => {
+      const dm = activeModalDM();
+      const popupForm = activePopupForm();
+      const cmp = dm[args.suffix];
+      if (!cmp) throw new Error('component not found: ' + args.suffix);
+      const prev = cmp.value;
+      const value = String(args.value);
+      cmp.set_value(value);
+      syncRenderedValueForSuffix(args.suffix, value);
+      const handlerName =
+        args.suffix === 'cboHangsaGb'
+          ? 'fn_cboHangsaGb_onChanged'
+          : `divManage_${args.suffix}_OnChanged`;
+      const handler = popupForm[handlerName];
+      if (typeof handler === 'function') {
+        try {
+          handler.call(popupForm, cmp, {
+            fromobject: cmp,
+            postvalue: String(args.value),
+            prevalue: prev ?? '',
+          });
+        } catch (e) {
+          console.warn('[GLS] change handler threw (non-fatal):', handlerName, e);
+        }
+      }
+      return true;
+    },
+
+    syncRenderedValue: (args: { suffix: string; value: string }): true => {
+      syncRenderedValueForSuffix(args.suffix, args.value);
+      return true;
+    },
+
+    /**
+     * 렌더된 필드 값이 기대값으로 바뀔 때까지 대기.
+     * 폼 상호작용의 성공 판정을 dataset 대신 실제 화면 값으로 옮긴다.
+     */
+    waitForRenderedValue: async (args: {
+      suffix: string;
+      value: string;
+      timeoutMs?: number;
+      contains?: boolean;
+    }): Promise<true> => {
+      const timeoutMs = args.timeoutMs ?? 5000;
+      const contains = args.contains ?? true;
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const actual = renderedValueForSuffix(args.suffix);
+        const matched =
+          args.suffix === 'calUseDt'
+            ? digitsOnly(actual) === digitsOnly(args.value)
+            : contains
+              ? actual.includes(args.value)
+              : actual === args.value;
+        if (matched) {
+          console.log('[GLS] waitForRenderedValue ✓', args.suffix, actual);
+          return true;
+        }
+        await wait(120);
+      }
+      throw new Error(
+        `rendered value for ${args.suffix} did not match "${args.value}" within ${timeoutMs}ms`,
+      );
+    },
+
+    /**
+     * 달력 아이콘을 실제 클릭해서 popup 을 열고, 월 이동 후 일자를 클릭한다.
+     * 실사용 경로와 동일하게 동작하도록 date는 interaction-only 로 처리한다.
+     */
+    selectCalendarDate: async (args: {
+      suffix: string;
+      yyyymmdd: string;
+      timeoutMs?: number;
+    }): Promise<true> => {
+      const timeoutMs = args.timeoutMs ?? 6000;
+      const targetYear = parseInt(args.yyyymmdd.slice(0, 4), 10);
+      const targetMonth = parseInt(args.yyyymmdd.slice(4, 6), 10);
+      const targetDay = parseInt(args.yyyymmdd.slice(6, 8), 10);
+      const root = byPopupSuffix(args.suffix);
+      if (!root) throw new Error('calendar root not found: ' + args.suffix);
+
+      const rootRect = root.getBoundingClientRect();
+      const triggerX = rootRect.right - 12;
+      const triggerY = rootRect.top + rootRect.height / 2;
+      const trigger = document.elementFromPoint(triggerX, triggerY) as HTMLElement | null;
+      if (!trigger || !isVisible(trigger)) {
+        throw new Error('calendar trigger not clickable');
+      }
+      clickVisibleThing(trigger);
+
+      let popup = await waitForCalendarPopup(Math.min(timeoutMs, 3000));
+      let monthDelta = (targetYear - popup.year) * 12 + (targetMonth - popup.month);
+      const navDeadline = Date.now() + timeoutMs;
+      while (monthDelta !== 0) {
+        if (Date.now() > navDeadline) {
+          throw new Error(`calendar navigation timed out for ${args.yyyymmdd}`);
+        }
+        const beforeKey = `${popup.year}-${popup.month}`;
+        clickCalendarArrow(popup.panel, monthDelta > 0 ? 'next' : 'prev');
+        await wait(150);
+        popup = await waitForCalendarPopup(Math.min(timeoutMs, 2000));
+        const afterKey = `${popup.year}-${popup.month}`;
+        if (afterKey === beforeKey) {
+          await wait(150);
+          popup = await waitForCalendarPopup(Math.min(timeoutMs, 2000));
+        }
+        monthDelta = (targetYear - popup.year) * 12 + (targetMonth - popup.month);
+      }
+
+      const dayCell = findCalendarDayCell(popup.panel, targetDay);
+      if (!dayCell) {
+        throw new Error(`calendar day ${targetDay} not found for ${args.yyyymmdd}`);
+      }
+      clickVisibleThing(dayCell);
+      return true;
+    },
+
+    /**
+     * row 클릭 후 공간 필드가 실제로 바뀌는지 대기.
+     */
+    waitForSpaceFieldSelection: async (args: {
+      spaceCode: string;
+      roomName: string;
+      timeoutMs?: number;
+    }): Promise<true> => {
+      const timeoutMs = args.timeoutMs ?? 5000;
+      const deadline = Date.now() + timeoutMs;
+      const expectedRoom = normalizeSpaceText(args.roomName);
+      while (Date.now() < deadline) {
+        const dm = activeModalDM();
+        const actual = renderedValueForSuffix('cboSpaceCd');
+        const normalizedActual = normalizeSpaceText(actual);
+        const internalValue = String(dm.cboSpaceCd?.value ?? '');
+        const internalText = String(dm.cboSpaceCd?.text ?? '');
+        const normalizedInternalText = normalizeSpaceText(internalText);
+        if (
+          actual.includes(args.spaceCode) ||
+          normalizedActual.includes(expectedRoom) ||
+          internalValue === String(args.spaceCode) ||
+          internalText.includes(args.spaceCode) ||
+          normalizedInternalText.includes(expectedRoom)
+        ) {
+          console.log('[GLS] waitForSpaceFieldSelection ✓', {
+            rendered: actual,
+            internalValue,
+            internalText,
+          });
+          return true;
+        }
+        await wait(120);
+      }
+      const dm = activeModalDM();
+      throw new Error(
+        `space field did not reflect ${args.spaceCode}/${args.roomName} within ${timeoutMs}ms (rendered="${renderedValueForSuffix('cboSpaceCd')}" internalValue="${String(dm.cboSpaceCd?.value ?? '')}" internalText="${String(dm.cboSpaceCd?.text ?? '')}")`,
+      );
+    },
+
+    /**
+     * 보이는 input / textarea 를 실제 사용자 입력처럼 채운다.
+     * Nexacro 내부 값도 best-effort로 동기화하되, 행동의 시작점은 DOM 컨트롤이다.
+     */
+    setRenderedControlValue: (args: { suffix: string; value: string | number }): true => {
+      const value = String(args.value);
+      const root = byPopupSuffix(args.suffix);
+      const labeledControl = labeledControlForSuffix(args.suffix);
+      if (labeledControl) {
+        setControlValueLikeUser(labeledControl, value);
+      } else {
+        if (!root) throw new Error('component root not found: ' + args.suffix);
+        const controls = Array.from(
+          root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+        ).filter(isVisible);
+        const control = controls[0] ?? null;
+        if (!control) throw new Error('visible control not found: ' + args.suffix);
+        setControlValueLikeUser(control, value);
+      }
+      syncRenderedValueForSuffix(args.suffix, value);
       return true;
     },
 
@@ -362,7 +1187,24 @@ declare global {
         if (cell) break;
         await wait(120);
       }
-      if (!cell) throw new Error('grdCal cell not found for row ' + rowIdx + ' (virtualized, scroll failed)');
+      if (!cell) {
+        const handler = form.grdCal_OnCellClick;
+        if (typeof handler === 'function') {
+          try {
+            handler.call(form, grid, {
+              fromobject: grid,
+              row: rowIdx,
+              cell: 0,
+              col: 0,
+            });
+            console.log('[GLS] clickSpaceRow ✓ handler fallback row', rowIdx);
+            return true;
+          } catch (handlerErr) {
+            console.warn('[GLS] grdCal_OnCellClick fallback failed', handlerErr);
+          }
+        }
+        throw new Error('grdCal cell not found for row ' + rowIdx + ' (virtualized, scroll failed)');
+      }
       console.log('[GLS] clickSpaceRow ✓ row', rowIdx);
       nexClick(cell);
       return true;
@@ -378,6 +1220,24 @@ declare global {
         nexClick(btn);
         return true;
       }
+      const title = findVisibleTextInPopup('공지사항');
+      if (title) {
+        let panel: HTMLElement | null = title;
+        while (panel && panel !== document.body) {
+          const rect = panel.getBoundingClientRect();
+          if (rect.width >= 260 && rect.height >= 120) {
+            const x = rect.right - 28;
+            const y = rect.top + 24;
+            const target = document.elementFromPoint(x, y) as HTMLElement | null;
+            if (target && isVisible(target)) {
+              clickVisibleThing(target);
+              return true;
+            }
+            break;
+          }
+          panel = panel.parentElement;
+        }
+      }
       return false;
     },
 
@@ -386,7 +1246,22 @@ declare global {
       return readDataset(activePopupForm(), 'dsGrdSub');
     },
 
-    /** btnSave_OnClick 호출 — 실제 예약 제출. */
+    /** visible 저장 버튼 클릭 — 실제 사용자 경로 우선. */
+    clickSaveButton: (): true => {
+      const save = byPopupSuffix('btnSave');
+      if (save && isVisible(save)) {
+        clickVisibleThing(save);
+        return true;
+      }
+      const saveText = findVisibleTextInPopup('저장');
+      if (saveText) {
+        clickVisibleThing(saveText);
+        return true;
+      }
+      throw new Error('visible save button not found');
+    },
+
+    /** btnSave_OnClick 호출 — 실제 클릭 실패 시 fallback. */
     submitReservation: (): true => {
       const pf = activePopupForm();
       if (typeof pf.btnSave_OnClick !== 'function') {
@@ -407,10 +1282,22 @@ declare global {
         await wait(200);
         if (!popupKey()) return { ok: true };
         const okText =
-          findByText('저장되었습니다.') ||
-          findByText('정상적으로 저장되었습니다.') ||
-          findByText('신청되었습니다.');
-        if (okText) return { ok: true };
+          hasVisibleTextContaining('저장되었습니다.') ||
+          hasVisibleTextContaining('정상적으로 저장되었습니다.') ||
+          hasVisibleTextContaining('신청되었습니다.') ||
+          hasVisibleTextContaining('실행되었습니다.') ||
+          hasVisibleTextContaining('사용일 전일까지 담당자가 확인 후 처리할 예정이며');
+        if (okText) {
+          const confirmBtn = findByText('확인');
+          if (confirmBtn) {
+            try {
+              nexClick(confirmBtn);
+            } catch (_) {
+              /* best-effort */
+            }
+          }
+          return { ok: true };
+        }
         const err = findByText('오류') || findByText('실패');
         if (err) {
           let p: HTMLElement | null = err.parentElement;
@@ -466,6 +1353,38 @@ declare global {
       } catch (e) {
         return { err: String(e) };
       }
+    },
+
+    /** 제출 직전 검증용 snapshot. popup success 문구보다 이 값을 신뢰한다. */
+    readFormSnapshot: (): Record<string, string> => {
+      const dm = activeModalDM();
+      return {
+        campusCode: String(dm.cboCampusCd?.value ?? ''),
+        campusText: String(dm.cboCampusCd?.text ?? ''),
+        buildingNo: String(dm.cboBuildCd?.value ?? ''),
+        buildingText: String(dm.cboBuildCd?.text ?? ''),
+        spaceCode: String(dm.cboSpaceCd?.value ?? ''),
+        spaceText: String(dm.cboSpaceCd?.text ?? ''),
+        date: String(dm.calUseDt?.value ?? ''),
+        dateRendered: renderedValueForSuffix('calUseDt'),
+        startTime: String(dm.cboResStTime?.value ?? ''),
+        startText: String(dm.cboResStTime?.text ?? ''),
+        startRendered: renderedValueForSuffix('cboResStTime'),
+        endTime: String(dm.cboResEdTime?.value ?? ''),
+        endText: String(dm.cboResEdTime?.text ?? ''),
+        endRendered: renderedValueForSuffix('cboResEdTime'),
+        hangsaGbCode: String(dm.cboHangsaGb?.value ?? ''),
+        hangsaRendered: renderedValueForSuffix('cboHangsaGb'),
+        organization: String(dm.edtSinchungGroup?.value ?? ''),
+        organizationRendered: renderedValueForSuffix('edtSinchungGroup'),
+        eventName: String(dm.edtSinchungEvent?.value ?? ''),
+        eventNameRendered: renderedValueForSuffix('edtSinchungEvent'),
+        headcount: String(dm.edtUseNum?.value ?? ''),
+        headcountRendered: renderedValueForSuffix('edtUseNum'),
+        purpose: String(dm.TextArea00?.value ?? ''),
+        purposeRendered: renderedValueForSuffix('TextArea00'),
+        blockingAlert: readBlockingAlertText(),
+      };
     },
   };
 

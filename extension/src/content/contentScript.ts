@@ -105,7 +105,12 @@ chrome.runtime.onMessage.addListener(
               m.date,
               m.startHour,
               m.endHour,
-              { formData: m.formData, startTime: m.startTime, endTime: m.endTime },
+              {
+                formData: m.formData,
+                startTime: m.startTime,
+                endTime: m.endTime,
+                strictPreview: m.strictPreview,
+              },
             );
             const reply: ContentAvailabilityResult = {
               type: 'CONTENT_AVAILABILITY_RESULT',
@@ -118,7 +123,13 @@ chrome.runtime.onMessage.addListener(
           }
           case 'BG_SUBMIT_RESERVATION': {
             const m = msg as BgSubmitReservation;
-            const r = await submitReservation(m.candidate, m.formData, '', '', '');
+            const r = await submitReservation(
+              m.candidate,
+              m.formData,
+              m.date,
+              m.startTime,
+              m.endTime,
+            );
             const reply: ContentSubmitResult = {
               type: 'CONTENT_SUBMIT_RESULT',
               ok: r.ok,
@@ -150,7 +161,7 @@ chrome.runtime.onMessage.addListener(
                 info: loginRequired
                   ? '로그인이 필요합니다. GLS 탭에서 로그인한 뒤 다시 시도해주세요.'
                   : hiddenInGrid
-                    ? 'GLS 시간표에 표시되지 않아 이번 요청에서는 제외했습니다.'
+                    ? `시간표 미노출: 후보 공간 행을 GLS 시간표에서 찾지 못했습니다. (${message})`
                   : `error: ${message}`,
               },
             ],

@@ -32,6 +32,7 @@ import * as apiClient from './apiClient';
 
 const GLS_URL = 'https://kingoinfo.skku.edu/';
 const GLS_URL_MATCH = 'https://kingoinfo.skku.edu/*';
+const QUEUES_SESSION_KEY = 'gls_queues_v1';
 
 // ----- per-conversation queue state -----
 
@@ -39,6 +40,7 @@ export interface CandidateQueueState {
   conversationId: string;
   tabId: number;
   date: string;
+  requestedHeadcount: number;
   startHour: number;
   endHour: number;
   startTime: string; // HH:MM (for submit echo)
@@ -55,22 +57,68 @@ export interface CandidateQueueState {
 
 const queues = new Map<string, CandidateQueueState>();
 
+async function persistQueues(): Promise<void> {
+  try {
+    const obj: Record<string, CandidateQueueState> = {};
+    for (const [k, v] of queues) obj[k] = v;
+    await chrome.storage.session.set({ [QUEUES_SESSION_KEY]: obj });
+  } catch {
+    // session storage may not be available — non-fatal.
+  }
+}
+
+async function rehydrateQueues(): Promise<void> {
+  try {
+    const got = await chrome.storage.session.get(QUEUES_SESSION_KEY);
+    const obj = got?.[QUEUES_SESSION_KEY] as Record<string, CandidateQueueState> | undefined;
+    if (!obj) return;
+    for (const [k, v] of Object.entries(obj)) queues.set(k, v);
+  } catch {
+    // ignore
+  }
+}
+
+const queuesReady = rehydrateQueues();
+
+export async function waitForQueuesRehydrated(): Promise<void> {
+  await queuesReady;
+}
+
 export function getQueue(conversationId: string): CandidateQueueState | undefined {
   return queues.get(conversationId);
 }
 
 export function clearQueue(conversationId: string): void {
   queues.delete(conversationId);
+  void persistQueues();
+}
+
+export function markQueuesDirty(): void {
+  void persistQueues();
+}
+
+function shuffleCandidates(candidates: SpaceCandidate[]): SpaceCandidate[] {
+  const shuffled = [...candidates];
+  for (let i = shuffled.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+  }
+  return shuffled;
 }
 
 // ----- small chrome.* promise helpers -----
 
 async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
   if (!forceNew) {
-    const tabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
-    if (tabs.length > 0 && tabs[0].id !== undefined) {
-      return tabs[0];
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (activeTab?.id !== undefined) {
+      if (activeTab.url?.startsWith(GLS_URL)) {
+        return activeTab;
+      }
+      const updated = await chrome.tabs.update(activeTab.id, { url: GLS_URL, active: true });
+      return updated;
     }
+    return chrome.tabs.create({ url: GLS_URL, active: true });
   }
   // 새 탭은 background 로 (active:false) 열어 popup 이 닫히지 않도록 한다.
   // popup 은 새 탭이 활성화되면 자동 dismiss 되기 때문. 자동화는 비활성 탭에서도
@@ -148,6 +196,25 @@ async function waitForContentReady(tabId: number, timeoutMs = 20000): Promise<Co
   throw new Error(
     `content script not ready in ${timeoutMs}ms: ${lastErr?.message ?? 'unknown'}`,
   );
+}
+
+async function ensureContentReady(tabId: number, timeoutMs = 20000): Promise<ContentSessionState> {
+  try {
+    return await waitForContentReady(tabId, timeoutMs);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+    const isGlsLike = !!tab?.url && (
+      tab.url.startsWith(GLS_URL) || tab.url.startsWith('https://login.skku.edu/')
+    );
+    if (!isGlsLike || !message.includes('Receiving end does not exist')) {
+      throw e;
+    }
+
+    console.warn('[BG] content script missing; reloading tab once', { tabId, url: tab?.url });
+    await chrome.tabs.reload(tabId).catch(() => {});
+    return waitForContentReady(tabId, timeoutMs);
+  }
 }
 
 function pickFirstCampusBuilding(slots: FilledSlots): { campusCode?: string; buildingNo?: string } {
@@ -228,7 +295,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   // session check — content script 가 로드될 때까지 폴링 (새 탭은 inject 까지 시간 필요).
   let session: ContentSessionState;
   try {
-    session = await waitForContentReady(tabId);
+    session = await ensureContentReady(tabId);
   } catch (e) {
     onStatusChange({
       kind: 'error',
@@ -244,8 +311,10 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 
   // fetch candidates (또는 dev 주입 사용)
   let candidates: SpaceCandidate[];
+  let preserveCandidateOrder = false;
   if (args.candidates && args.candidates.length > 0) {
     candidates = args.candidates;
+    preserveCandidateOrder = true;
   } else {
     try {
       candidates = await apiClient.listSpaces({
@@ -263,6 +332,9 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
+  // Demo 단계에서는 다양한 공간을 빨리 검증할 수 있도록 시도 순서를 랜덤화한다.
+  const orderedCandidates = preserveCandidateOrder ? [...candidates] : shuffleCandidates(candidates);
+
   const startHour = parseHourFromHHMM(slots.start_time);
   const endHour = parseHourFromHHMM(endTime);
 
@@ -270,18 +342,20 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     conversationId,
     tabId,
     date: slots.date,
+    requestedHeadcount: slots.headcount,
     startHour,
     endHour,
     startTime: slots.start_time,
     endTime,
-    remaining: [...candidates],
-    totalCount: candidates.length,
+    remaining: [...orderedCandidates],
+    totalCount: orderedCandidates.length,
     triedCount: 0,
     lastProposed: null,
     log: [],
     pendingFormData: args.pendingFormData,
   };
   queues.set(conversationId, state);
+  void persistQueues();
 
   onStatusChange({
     kind: 'searching',
@@ -304,6 +378,7 @@ async function searchNext(
   while (state.remaining.length > 0) {
     const candidate = state.remaining.shift()!;
     state.triedCount += 1;
+    void persistQueues();
     // 시도 시작 시점 — 현재 후보 표시
     onStatusChange({
       kind: 'searching',
@@ -342,6 +417,7 @@ async function searchNext(
         total: state.totalCount,
         log: state.log,
       });
+      void persistQueues();
       continue;
     }
 
@@ -357,11 +433,13 @@ async function searchNext(
       await chrome.tabs.update(state.tabId, { active: true }).catch(() => {});
       onStatusChange({ kind: 'login_required' });
       queues.delete(state.conversationId);
+      void persistQueues();
       return;
     }
 
     if (result.available) {
       state.lastProposed = candidate;
+      void persistQueues();
       onStatusChange({
         kind: 'candidate_found',
         spaceCode: candidate.glsSpaceCode,
@@ -392,6 +470,7 @@ async function searchNext(
 
   onStatusChange({ kind: 'no_candidate', log: state.log });
   queues.delete(state.conversationId);
+  void persistQueues();
 }
 
 /**
@@ -404,7 +483,43 @@ export async function continueAfterRejection(
   const state = queues.get(conversationId);
   if (!state) return;
   state.lastProposed = null;
+  void persistQueues();
   await searchNext(state, onStatusChange);
+}
+
+export interface PreviewReservationArgs {
+  conversationId: string;
+  candidate: SpaceCandidate;
+  formData: ReservationFormData;
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
+/**
+ * 실제 저장 없이 현재 후보 공간에 대해 모달을 다시 열고 신청서를 채운다.
+ * 검증/데모 중 "제출 직전 상태"를 눈으로 확인할 때 사용.
+ */
+export async function previewReservationForm(
+  args: PreviewReservationArgs,
+): Promise<ContentAvailabilityResult> {
+  const state = queues.get(args.conversationId);
+  const tabId = state?.tabId ?? (await findOrCreateGlsTab()).id;
+  if (tabId === undefined) {
+    throw new Error('GLS 탭 ID 확보 실패');
+  }
+
+  return sendToTab<BgCheckAvailability, ContentAvailabilityResult>(tabId, {
+    type: 'BG_CHECK_AVAILABILITY',
+    candidate: args.candidate,
+    date: args.date,
+    startHour: parseHourFromHHMM(args.startTime),
+    endHour: parseHourFromHHMM(args.endTime),
+    formData: args.formData,
+    startTime: args.startTime,
+    endTime: args.endTime,
+    strictPreview: true,
+  });
 }
 
 // ----- submit confirmed reservation -----
@@ -432,11 +547,14 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
 
   let result: ContentSubmitResult;
   try {
-    result = await sendToTab<BgSubmitReservation, ContentSubmitResult>(tabId, {
-      type: 'BG_SUBMIT_RESERVATION',
-      candidate,
-      formData,
-    });
+      result = await sendToTab<BgSubmitReservation, ContentSubmitResult>(tabId, {
+        type: 'BG_SUBMIT_RESERVATION',
+        candidate,
+        formData,
+        date: args.date,
+        startTime: args.startTime,
+        endTime: args.endTime,
+      });
   } catch (e) {
     onStatusChange({ kind: 'error', message: `제출 메시지 실패: ${(e as Error).message}` });
     return;
@@ -460,4 +578,5 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
     // notifications icon may not yet exist — non-fatal.
   }
   queues.delete(conversationId);
+  void persistQueues();
 }

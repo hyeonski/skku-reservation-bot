@@ -163,6 +163,37 @@ body {
   padding: 6px 8px;
   border-radius: 6px;
 }
+.candidate-card__form {
+  display: grid;
+  gap: 8px;
+}
+.candidate-card__field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--color-muted);
+}
+.candidate-card__field span {
+  font-weight: 600;
+}
+.candidate-card__field input,
+.candidate-card__field select,
+.candidate-card__field textarea {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 7px 8px;
+  font: inherit;
+  color: #1f2328;
+  background: #fff;
+  box-sizing: border-box;
+}
+.candidate-card__field textarea {
+  resize: vertical;
+}
+.candidate-card__field--short {
+  max-width: 120px;
+}
 .candidate-card__actions {
   display: flex;
   gap: 8px;

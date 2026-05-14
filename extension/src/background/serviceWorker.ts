@@ -20,6 +20,13 @@ import * as apiClient from './apiClient';
 import * as gls from './glsCoordinator';
 import { getOrCreateClientId } from '../shared/clientId';
 
+interface PendingStartRequest {
+  conversationId: string;
+  slots: FilledSlots;
+  candidates?: import('../shared/types').SpaceCandidate[];
+  pendingFormData?: ReservationFormData;
+}
+
 // ---------- per-conversation context (history + last parse) ----------
 
 interface ConversationContext {
@@ -28,11 +35,19 @@ interface ConversationContext {
   lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
   lastStatus: AutomationStatus;
+  pendingStart: PendingStartRequest | null;
+  lastProposed: import('../shared/types').SpaceCandidate | null;
 }
 
 const contexts = new Map<string, ConversationContext>();
+const pendingStarts = new Map<string, PendingStartRequest>();
 
 const SESSION_KEY = 'sw_contexts_v1';
+const GLS_URL_PREFIX = 'https://kingoinfo.skku.edu/';
+const rehydrationReady = (async () => {
+  await rehydrateContexts();
+  await gls.waitForQueuesRehydrated();
+})();
 
 async function persistContexts(): Promise<void> {
   try {
@@ -64,10 +79,35 @@ function getOrCreateContext(conversationId: string): ConversationContext {
       lastIntent: null,
       lastFilledSlots: null,
       lastStatus: { kind: 'idle' },
+      pendingStart: null,
+      lastProposed: null,
     };
     contexts.set(conversationId, ctx);
   }
   return ctx;
+}
+
+function resolveSearchSlots(ctx: ConversationContext): {
+  date: string;
+  startTime: string;
+  endTime: string;
+} | null {
+  const slots = ctx.pendingStart?.slots ?? ctx.lastFilledSlots;
+  if (!slots?.date || !slots.start_time || !slots.end_time) return null;
+  return {
+    date: slots.date,
+    startTime: slots.start_time,
+    endTime: slots.end_time,
+  };
+}
+
+async function shouldSkipNavigationPrompt(): Promise<boolean> {
+  try {
+    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return !!activeTab?.url?.startsWith(GLS_URL_PREFIX);
+  } catch {
+    return false;
+  }
 }
 
 // ---------- popup status pushing ----------
@@ -76,6 +116,14 @@ function makeStatusEmitter(conversationId: string): (s: AutomationStatus) => voi
   return (status) => {
     const ctx = getOrCreateContext(conversationId);
     ctx.lastStatus = status;
+    if (status.kind === 'candidate_found') {
+      ctx.lastProposed = gls.getQueue(conversationId)?.lastProposed ?? ctx.lastProposed;
+    } else if (status.kind !== 'submitting') {
+      ctx.lastProposed = null;
+    }
+    if (status.kind === 'done' || status.kind === 'no_candidate' || status.kind === 'idle') {
+      ctx.pendingStart = null;
+    }
     void persistContexts();
 
     const msg: BgStatusUpdate = {
@@ -105,11 +153,11 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup?.addListener(() => {
-  void rehydrateContexts();
+  void rehydrationReady;
 });
 
 // Best-effort rehydrate on cold module load too.
-void rehydrateContexts();
+void rehydrationReady;
 
 // ---------- message router ----------
 
@@ -140,8 +188,26 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
 
+    case 'POPUP_CONFIRM_NAVIGATION':
+      handleConfirmNavigation(msg)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_RESUME_AFTER_LOGIN':
+      handleResumeAfterLogin(msg)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
     case 'POPUP_CONFIRM_RESERVATION':
       handleConfirm(msg)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_PREVIEW_RESERVATION':
+      handlePreview(msg)
         .then(() => sendResponse({ ok: true }))
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
@@ -155,15 +221,19 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
     case 'POPUP_GET_STATUS': {
       // popup 재오픈 시 호출. BG 가 들고 있는 대화 컨텍스트 + 자동화 큐 상태를
       // 반환해서 popup 이 history / 진행 상태 / 미확정 후보 카드 까지 복원할 수 있도록.
-      const ctx = contexts.get(msg.conversationId);
-      const queue = gls.getQueue(msg.conversationId);
-      sendResponse({
-        status: ctx?.lastStatus ?? { kind: 'idle' },
-        lastFilledSlots: ctx?.lastFilledSlots ?? null,
-        history: ctx?.history ?? [],
-        lastProposed: queue?.lastProposed ?? null,
-      });
-      return false;
+      void (async () => {
+        await rehydrationReady;
+        const ctx = contexts.get(msg.conversationId);
+        const queue = gls.getQueue(msg.conversationId);
+        sendResponse({
+          status: ctx?.lastStatus ?? { kind: 'idle' },
+          lastFilledSlots: ctx?.lastFilledSlots ?? null,
+          history: ctx?.history ?? [],
+          lastProposed: queue?.lastProposed ?? ctx?.lastProposed ?? null,
+          pendingFormData: queue?.pendingFormData ?? ctx?.pendingStart?.pendingFormData ?? null,
+        });
+      })().catch((e) => sendResponse({ error: (e as Error).message }));
+      return true;
     }
 
     case 'POPUP_DEV_LIST_SPACES':
@@ -232,15 +302,87 @@ async function handleStartSearch(
   msg: Extract<PopupToBackground, { type: 'POPUP_START_SEARCH' }>,
 ): Promise<void> {
   const emit = makeStatusEmitter(msg.conversationId);
-  // Run async; don't await full completion because it intentionally returns
-  // early once a candidate is proposed (awaiting POPUP_CONFIRM_RESERVATION).
+  const pending: PendingStartRequest = {
+    conversationId: msg.conversationId,
+    slots: msg.slots,
+  };
+  pendingStarts.set(msg.conversationId, pending);
+  const ctx = getOrCreateContext(msg.conversationId);
+  ctx.pendingStart = pending;
+  void persistContexts();
+  if (await shouldSkipNavigationPrompt()) {
+    void gls
+      .runReservationFlow({
+        conversationId: pending.conversationId,
+        slots: pending.slots,
+        candidates: pending.candidates,
+        pendingFormData: pending.pendingFormData,
+        forceNewTab: false,
+        onStatusChange: emit,
+      })
+      .catch((e) => {
+        emit({ kind: 'error', message: (e as Error).message });
+      });
+    return;
+  }
+  emit({ kind: 'navigation_required' });
+}
+
+async function handleConfirmNavigation(
+  msg: Extract<PopupToBackground, { type: 'POPUP_CONFIRM_NAVIGATION' }>,
+): Promise<void> {
+  const emit = makeStatusEmitter(msg.conversationId);
+  const ctx = getOrCreateContext(msg.conversationId);
+  const pending = pendingStarts.get(msg.conversationId) ?? ctx.pendingStart;
+
+  if (!msg.confirmed) {
+    pendingStarts.delete(msg.conversationId);
+    ctx.pendingStart = null;
+    void persistContexts();
+    emit({ kind: 'idle' });
+    return;
+  }
+
+  if (!pending) {
+    emit({ kind: 'error', message: '이동 대기 중인 예약 요청이 없습니다.' });
+    return;
+  }
+
+  pendingStarts.delete(msg.conversationId);
+  ctx.pendingStart = pending;
+  void persistContexts();
   void gls
     .runReservationFlow({
-      conversationId: msg.conversationId,
-      slots: msg.slots,
-      // 항상 새 탭 (active:false). popup 이 닫히지 않고, 확장 reload 로 orphaned 된
-      // 기존 탭의 content script 와 충돌하지 않으며, 직전 자동화의 stale 모달 상태도 회피.
-      forceNewTab: true,
+      conversationId: pending.conversationId,
+      slots: pending.slots,
+      candidates: pending.candidates,
+      pendingFormData: pending.pendingFormData,
+      forceNewTab: false,
+      onStatusChange: emit,
+    })
+    .catch((e) => {
+      emit({ kind: 'error', message: (e as Error).message });
+    });
+}
+
+async function handleResumeAfterLogin(
+  msg: Extract<PopupToBackground, { type: 'POPUP_RESUME_AFTER_LOGIN' }>,
+): Promise<void> {
+  const emit = makeStatusEmitter(msg.conversationId);
+  const ctx = getOrCreateContext(msg.conversationId);
+  const pending = ctx.pendingStart;
+  if (!pending) {
+    emit({ kind: 'error', message: '다시 시작할 예약 요청을 찾지 못했습니다.' });
+    return;
+  }
+
+  void gls
+    .runReservationFlow({
+      conversationId: pending.conversationId,
+      slots: pending.slots,
+      candidates: pending.candidates,
+      pendingFormData: pending.pendingFormData,
+      forceNewTab: false,
       onStatusChange: emit,
     })
     .catch((e) => {
@@ -253,6 +395,8 @@ async function handleConfirm(
 ): Promise<void> {
   const emit = makeStatusEmitter(msg.conversationId);
   const queue = gls.getQueue(msg.conversationId);
+  const ctx = getOrCreateContext(msg.conversationId);
+  const candidate = queue?.lastProposed ?? ctx.lastProposed;
 
   if (!msg.confirmed) {
     // User rejected the proposed candidate — try the next one.
@@ -262,7 +406,7 @@ async function handleConfirm(
     return;
   }
 
-  if (!queue || !queue.lastProposed) {
+  if (!candidate) {
     emit({ kind: 'error', message: '제안된 후보가 없습니다.' });
     return;
   }
@@ -273,23 +417,35 @@ async function handleConfirm(
   //   3. TODO placeholder (디버그 폴백 — 실제 GLS에서는 거부될 가능성)
   const formData: ReservationFormData =
     msg.formData ??
-    queue.pendingFormData ??
+    queue?.pendingFormData ??
+    ctx.pendingStart?.pendingFormData ??
     ({
-      hangsaGbCode: 'TODO',
-      organization: 'TODO',
-      eventName: 'TODO',
-      headcount: queue.lastProposed.capacityMin,
-      purpose: 'TODO',
+      hangsaGbCode: '113',
+      organization: '미입력',
+      eventName: '공간예약 신청',
+      headcount: queue?.requestedHeadcount ?? candidate.capacityMax,
+      purpose: '회의',
     } as ReservationFormData);
+
+  if (queue) queue.pendingFormData = formData;
+  if (ctx.pendingStart) ctx.pendingStart.pendingFormData = formData;
+  gls.markQueuesDirty();
+  void persistContexts();
+
+  const slots = resolveSearchSlots(ctx);
+  if (!slots) {
+    emit({ kind: 'error', message: '제출할 예약 슬롯을 복원하지 못했습니다.' });
+    return;
+  }
 
   void gls
     .submitConfirmedReservation({
       conversationId: msg.conversationId,
-      candidate: queue.lastProposed,
+      candidate,
       formData,
-      date: queue.date,
-      startTime: queue.startTime,
-      endTime: queue.endTime,
+      date: slots.date,
+      startTime: slots.startTime,
+      endTime: slots.endTime,
       onStatusChange: emit,
     })
     .then(async () => {
@@ -311,6 +467,61 @@ async function handleConfirm(
     });
 }
 
+async function handlePreview(
+  msg: Extract<PopupToBackground, { type: 'POPUP_PREVIEW_RESERVATION' }>,
+): Promise<void> {
+  const emit = makeStatusEmitter(msg.conversationId);
+  const queue = gls.getQueue(msg.conversationId);
+  const ctx = getOrCreateContext(msg.conversationId);
+  const candidate = queue?.lastProposed ?? ctx.lastProposed;
+  if (!candidate) {
+    throw new Error('미리보기할 후보가 없습니다.');
+  }
+  if (candidate.glsSpaceCode !== msg.spaceCode) {
+    throw new Error('현재 제안된 후보와 미리보기 대상이 다릅니다.');
+  }
+
+  const formData: ReservationFormData =
+    msg.formData ??
+    queue?.pendingFormData ??
+    ctx.pendingStart?.pendingFormData ??
+    ({
+      hangsaGbCode: '113',
+      organization: '미입력',
+      eventName: '공간예약 신청',
+      headcount: queue?.requestedHeadcount ?? candidate.capacityMax,
+      purpose: '회의',
+    } as ReservationFormData);
+
+  if (queue) queue.pendingFormData = formData;
+  if (ctx.pendingStart) ctx.pendingStart.pendingFormData = formData;
+  gls.markQueuesDirty();
+  void persistContexts();
+
+  const slots = resolveSearchSlots(ctx);
+  if (!slots) {
+    throw new Error('미리보기할 예약 슬롯을 복원하지 못했습니다.');
+  }
+
+  const result = await gls.previewReservationForm({
+    conversationId: msg.conversationId,
+    candidate,
+    formData,
+    date: slots.date,
+    startTime: slots.startTime,
+    endTime: slots.endTime,
+  });
+
+  if (result.loginRequired) {
+    emit({ kind: 'login_required' });
+    return;
+  }
+  if (!result.available) {
+    const reason = result.conflicts?.[0]?.info ?? '폼 미리보기를 준비하지 못했습니다.';
+    throw new Error(reason);
+  }
+}
+
 async function handleDevRunAutomation(
   msg: Extract<PopupToBackground, { type: 'POPUP_DEV_RUN_AUTOMATION' }>,
 ): Promise<void> {
@@ -320,26 +531,41 @@ async function handleDevRunAutomation(
   // SW context도 만들어두면 popup 재오픈 시 status 복원 가능
   const ctx = getOrCreateContext(msg.conversationId);
   ctx.lastFilledSlots = msg.slots;
+  const pending = {
+    conversationId: msg.conversationId,
+    slots: msg.slots,
+    candidates: msg.candidates,
+    pendingFormData: msg.formData,
+  };
+  ctx.pendingStart = pending;
   void persistContexts();
 
-  void gls
-    .runReservationFlow({
-      conversationId: msg.conversationId,
-      slots: msg.slots,
-      candidates: msg.candidates,
-      pendingFormData: msg.formData,
-      forceNewTab: true, // dev 모드는 항상 새 탭 — stale state 회피
-      onStatusChange: emit,
-    })
-    .catch((e) => {
-      emit({ kind: 'error', message: (e as Error).message });
-    });
+  pendingStarts.set(msg.conversationId, pending);
+  if (await shouldSkipNavigationPrompt()) {
+    void gls
+      .runReservationFlow({
+        conversationId: msg.conversationId,
+        slots: msg.slots,
+        candidates: msg.candidates,
+        pendingFormData: msg.formData,
+        forceNewTab: false,
+        onStatusChange: emit,
+      })
+      .catch((e) => {
+        emit({ kind: 'error', message: (e as Error).message });
+      });
+    return;
+  }
+  emit({ kind: 'navigation_required' });
 }
 
 async function handleCancel(
   msg: Extract<PopupToBackground, { type: 'POPUP_CANCEL' }>,
 ): Promise<void> {
   gls.clearQueue(msg.conversationId);
+  pendingStarts.delete(msg.conversationId);
+  const ctx = contexts.get(msg.conversationId);
+  if (ctx) ctx.pendingStart = null;
   contexts.delete(msg.conversationId);
   void persistContexts();
   try {

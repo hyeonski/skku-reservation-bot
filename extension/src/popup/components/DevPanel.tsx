@@ -11,12 +11,25 @@
  * 가깝다 — 자동화 + 서버 /spaces 통합 검증 동시에 됨.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { FilledSlots, SpaceCandidate } from '../../shared/types';
 import type { ReservationFormData } from '../../shared/messages';
 
+function nextWeekThursday(): string {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun ... 4=Thu
+  const daysUntilThisThursday = (4 - day + 7) % 7;
+  const daysToNextWeekThursday = daysUntilThisThursday + 7;
+  const target = new Date(now);
+  target.setDate(now.getDate() + daysToNextWeekThursday);
+  const y = target.getFullYear();
+  const m = String(target.getMonth() + 1).padStart(2, '0');
+  const d = String(target.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 const SLOT_DEFAULTS = {
-  date: '',
+  date: nextWeekThursday(),
   startTime: '18:00',
   endTime: '20:00',
   headcount: 20,
@@ -36,6 +49,8 @@ const FORM_DEFAULTS = {
 
 export interface DevPanelProps {
   busy: boolean;
+  initialState?: DevPanelState | null;
+  onStateChange?: (state: DevPanelState) => void;
   onListSpaces: (args: {
     headcount: number;
     campusCode?: string;
@@ -50,14 +65,44 @@ export interface DevPanelProps {
 
 type Step = 'form' | 'list';
 
-export function DevPanel({ busy, onListSpaces, onRun }: DevPanelProps) {
-  const [step, setStep] = useState<Step>('form');
-  const [slots, setSlots] = useState({ ...SLOT_DEFAULTS });
-  const [filters, setFilters] = useState({ ...FILTER_DEFAULTS });
-  const [form, setForm] = useState({ ...FORM_DEFAULTS });
-  const [candidates, setCandidates] = useState<SpaceCandidate[]>([]);
+export interface DevPanelState {
+  step: Step;
+  slots: typeof SLOT_DEFAULTS;
+  filters: typeof FILTER_DEFAULTS;
+  form: typeof FORM_DEFAULTS;
+  candidates: SpaceCandidate[];
+  error: string | null;
+}
+
+export function DevPanel({ busy, initialState, onStateChange, onListSpaces, onRun }: DevPanelProps) {
+  const [step, setStep] = useState<Step>(initialState?.step ?? 'form');
+  const [slots, setSlots] = useState(initialState?.slots ?? { ...SLOT_DEFAULTS });
+  const [filters, setFilters] = useState(initialState?.filters ?? { ...FILTER_DEFAULTS });
+  const [form, setForm] = useState(initialState?.form ?? { ...FORM_DEFAULTS });
+  const [candidates, setCandidates] = useState<SpaceCandidate[]>(initialState?.candidates ?? []);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialState?.error ?? null);
+
+  useEffect(() => {
+    if (!initialState) return;
+    setStep(initialState.step);
+    setSlots(initialState.slots);
+    setFilters(initialState.filters);
+    setForm(initialState.form);
+    setCandidates(initialState.candidates);
+    setError(initialState.error);
+  }, [initialState]);
+
+  useEffect(() => {
+    onStateChange?.({
+      step,
+      slots,
+      filters,
+      form,
+      candidates,
+      error,
+    });
+  }, [step, slots, filters, form, candidates, error, onStateChange]);
 
   const setSlot = <K extends keyof typeof SLOT_DEFAULTS>(k: K, v: (typeof SLOT_DEFAULTS)[K]) =>
     setSlots((p) => ({ ...p, [k]: v }));
@@ -93,6 +138,10 @@ export function DevPanel({ busy, onListSpaces, onRun }: DevPanelProps) {
 
   const runWith = useCallback(
     (candidate: SpaceCandidate) => {
+      const prioritizedCandidates = [
+        candidate,
+        ...candidates.filter((c) => c.glsSpaceCode !== candidate.glsSpaceCode),
+      ];
       const filledSlots: FilledSlots = {
         date: slots.date,
         start_time: slots.startTime,
@@ -109,9 +158,9 @@ export function DevPanel({ busy, onListSpaces, onRun }: DevPanelProps) {
         headcount: Number(slots.headcount),
         purpose: form.purpose,
       };
-      void onRun({ slots: filledSlots, candidates: [candidate], formData });
+      void onRun({ slots: filledSlots, candidates: prioritizedCandidates, formData });
     },
-    [slots, form, onRun],
+    [slots, form, candidates, onRun],
   );
 
   // ---------- Step: form ----------

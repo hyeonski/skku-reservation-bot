@@ -28,8 +28,26 @@ export interface PopupConfirmReservation {
   formData?: ReservationFormData;
 }
 
+export interface PopupPreviewReservation {
+  type: 'POPUP_PREVIEW_RESERVATION';
+  conversationId: string;
+  spaceCode: string;
+  formData?: ReservationFormData;
+}
+
 export interface PopupCancel {
   type: 'POPUP_CANCEL';
+  conversationId: string;
+}
+
+export interface PopupConfirmNavigation {
+  type: 'POPUP_CONFIRM_NAVIGATION';
+  conversationId: string;
+  confirmed: boolean;
+}
+
+export interface PopupResumeAfterLogin {
+  type: 'POPUP_RESUME_AFTER_LOGIN';
   conversationId: string;
 }
 
@@ -106,12 +124,16 @@ export interface BgCheckAvailability {
   formData?: ReservationFormData;
   startTime?: string; // "HH:MM"
   endTime?: string;   // "HH:MM"
+  strictPreview?: boolean;
 }
 
 export interface BgSubmitReservation {
   type: 'BG_SUBMIT_RESERVATION';
   candidate: SpaceCandidate;
   formData: ReservationFormData;
+  date: string;
+  startTime: string;
+  endTime: string;
 }
 
 // ---------- content → background ----------
@@ -152,6 +174,9 @@ export interface ReservationFormData {
 export type PopupToBackground =
   | PopupChatRequest
   | PopupStartSearch
+  | PopupConfirmNavigation
+  | PopupResumeAfterLogin
+  | PopupPreviewReservation
   | PopupConfirmReservation
   | PopupCancel
   | PopupGetStatus

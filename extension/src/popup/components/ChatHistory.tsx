@@ -25,7 +25,7 @@ export function ChatHistory({ messages, footer }: Props) {
     <div className="chat-history" ref={containerRef}>
       {messages.length === 0 && (
         <div className="chat-empty">
-          예: "내일 오후 2시부터 4시까지 6명 회의실 잡아줘"
+          예: "다음주 목요일 오후 2시부터 4시까지 6명 회의실 잡아줘"
         </div>
       )}
       {messages.map((m, i) => (
