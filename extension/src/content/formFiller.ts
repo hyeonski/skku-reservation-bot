@@ -101,7 +101,25 @@ export async function fillForm(args: FillArgs): Promise<void> {
     if (date) {
       await setDateInteractionFirst(date);
     }
+    // preview/submit 경로는 checkAvailability의 문맥을 재사용하지 않고 모달을
+    // 다시 맞추므로, 느린 건물/공간 cascade 에서 후보 코드가 dsCboSpace 및
+    // 예약현황 그리드에 실제로 나타날 때까지 한 번 더 확인한 뒤 진행한다.
+    await runInPage('waitForDatasetValue', {
+      dsName: 'dsCboSpace',
+      column: 'GU_SPACE_CD',
+      value: candidate.glsSpaceCode,
+      timeoutMs: 5000,
+    });
+    await runInPage('waitForGridSpaceCode', {
+      spaceCode: candidate.glsSpaceCode,
+      timeoutMs: 5000,
+    });
   }
+
+  // 이전 preview/후보에서 남은 사용자 입력값이 다음 fill에 섞이지 않도록
+  // 행사 메타/시간 필드를 먼저 비우고 다시 채운다.
+  await runInPage('clearManagedFormFields');
+  await wait(180);
 
   // 사람처럼 먼저 공간 row를 다시 클릭해 현재 문맥을 맞춘다.
   await runInPage('clickSpaceRow', { glsSpaceCode: candidate.glsSpaceCode });
@@ -126,11 +144,25 @@ export async function fillForm(args: FillArgs): Promise<void> {
       spaceCode: candidate.glsSpaceCode,
       roomName: candidate.roomName,
     });
-    if (!spaceSelected) {
-      // preview/demo 경로에서는 row 클릭이 핵심 상호작용이지만,
-      // 끝내 공간 필드가 안 맞을 때만 코드 커밋 fallback을 허용한다.
+    let spaceSelectionCommitted = false;
+    if (spaceSelected) {
       try {
-        await runInPage('setComponentValue', {
+        await runInPage('waitForSpaceFieldSelection', {
+          spaceCode: candidate.glsSpaceCode,
+          roomName: candidate.roomName,
+          timeoutMs: 1500,
+        });
+        spaceSelectionCommitted = true;
+      } catch {
+        // dropdown item 클릭이 성공으로 끝나도 간헐적으로 실제 combo 값이
+        // 이전 공간/선택 상태로 남는다. 이 경우 아래 강제 커밋 fallback 사용.
+      }
+    }
+    if (!spaceSelectionCommitted) {
+      // preview/demo 경로에서는 row 클릭이 핵심 상호작용이지만,
+      // 끝내 공간 필드가 안 맞을 때는 코드값 + onChanged를 강제로 커밋한다.
+      try {
+        await runInPage('setComponentValueAndFireChange', {
           suffix: MODAL_FIELDS.공간,
           value: candidate.glsSpaceCode,
         });

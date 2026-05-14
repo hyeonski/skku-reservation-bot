@@ -14,13 +14,24 @@
 
 import type {
   BackgroundToContent,
+  BgCheckBridge,
   BgCheckAvailability,
+  BgClearPreviewForm,
+  BgPreviewReservation,
   BgSubmitReservation,
   ContentAvailabilityResult,
+  ContentBridgeState,
+  ContentPreviewResult,
   ContentSessionState,
   ContentSubmitResult,
 } from '../shared/messages';
-import { checkSession, checkAvailability, submitReservation } from './glsAgent';
+import {
+  checkSession,
+  checkAvailability,
+  clearPreviewFormState,
+  previewReservationForm,
+  submitReservation,
+} from './glsAgent';
 
 // ---------- main-world RPC (CustomEvent 기반) ----------
 //
@@ -98,6 +109,15 @@ chrome.runtime.onMessage.addListener(
             sendResponse(reply);
             break;
           }
+          case 'BG_CHECK_BRIDGE': {
+            await runInPage('ping', undefined, 3000);
+            const reply: ContentBridgeState = {
+              type: 'CONTENT_BRIDGE_STATE',
+              ready: true,
+            };
+            sendResponse(reply);
+            break;
+          }
           case 'BG_CHECK_AVAILABILITY': {
             const m = msg as BgCheckAvailability;
             const r = await checkAvailability(
@@ -139,6 +159,29 @@ chrome.runtime.onMessage.addListener(
             sendResponse(reply);
             break;
           }
+          case 'BG_PREVIEW_RESERVATION': {
+            const m = msg as BgPreviewReservation;
+            const r = await previewReservationForm(
+              m.candidate,
+              m.formData,
+              m.date,
+              m.startTime,
+              m.endTime,
+            );
+            const reply: ContentPreviewResult = {
+              type: 'CONTENT_PREVIEW_RESULT',
+              ok: r.ok,
+              spaceCode: m.candidate.glsSpaceCode,
+              error: r.error,
+            };
+            sendResponse(reply);
+            break;
+          }
+          case 'BG_CLEAR_PREVIEW_FORM': {
+            await clearPreviewFormState();
+            sendResponse({ ok: true } as never);
+            break;
+          }
           default: {
             sendResponse(undefined as never);
           }
@@ -173,6 +216,23 @@ chrome.runtime.onMessage.addListener(
             type: 'CONTENT_SUBMIT_RESULT',
             ok: false,
             spaceCode: m.candidate.glsSpaceCode,
+            error: message,
+          };
+          sendResponse(reply);
+        } else if ((msg as BackgroundToContent).type === 'BG_PREVIEW_RESERVATION') {
+          const m = msg as BgPreviewReservation;
+          const reply: ContentPreviewResult = {
+            type: 'CONTENT_PREVIEW_RESULT',
+            ok: false,
+            spaceCode: m.candidate.glsSpaceCode,
+            loginRequired: message === 'LOGIN_REQUIRED' || !checkSession(),
+            error: message,
+          };
+          sendResponse(reply);
+        } else if ((msg as BackgroundToContent).type === 'BG_CHECK_BRIDGE') {
+          const reply: ContentBridgeState = {
+            type: 'CONTENT_BRIDGE_STATE',
+            ready: false,
             error: message,
           };
           sendResponse(reply);

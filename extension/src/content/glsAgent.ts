@@ -84,6 +84,37 @@ export async function openReservationModal(): Promise<void> {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+export async function clearPreviewFormState(): Promise<void> {
+  const hasPopup = await runInPage<boolean>('hasPopupFrame');
+  if (!hasPopup) return;
+  await runInPage('clearManagedFormFields');
+  await runInPage('dismissNoticeIfShown');
+}
+
+export async function previewReservationForm(
+  candidate: SpaceCandidate,
+  formData: ReservationFormData,
+  date: string,
+  startTime: string,
+  endTime: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    await openReservationModal();
+    await clearPreviewFormState();
+    await fillForm({
+      candidate,
+      date: date ? toYyyymmdd(date) : '',
+      startTime: startTime ? toHHMM(startTime) : '',
+      endTime: endTime ? toHHMM(endTime) : '',
+      formData,
+      primed: false,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ---------- 가용성 확인 ----------
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -178,6 +209,9 @@ export async function checkAvailability(
       throw e;
     }
   }
+  if (!options?.strictPreview) {
+    await clearPreviewFormState();
+  }
   const yyyymmdd = toYyyymmdd(date);
 
   let datasetMessage = '';
@@ -255,7 +289,7 @@ export async function checkAvailability(
     await runInPage('waitForSpaceFieldSelection', {
       spaceCode: candidate.glsSpaceCode,
       roomName: candidate.roomName,
-      timeoutMs: 5000,
+      timeoutMs: 1800,
     });
   } catch (err) {
     console.warn('[GLS-iso] space field did not reflect after row click; continuing with dsGrdSub read', err);

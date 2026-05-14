@@ -19,11 +19,16 @@ import type {
   SearchLogEntry,
 } from '../shared/types';
 import type {
+  BgCheckBridge,
   BgCheckSession,
   BgCheckAvailability,
+  BgClearPreviewForm,
+  BgPreviewReservation,
   BgSubmitReservation,
+  ContentBridgeState,
   ContentSessionState,
   ContentAvailabilityResult,
+  ContentPreviewResult,
   ContentSubmitResult,
   BgCandidateProposal,
   ReservationFormData,
@@ -132,6 +137,18 @@ async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
   return (await chrome.tabs.sendMessage(tabId, msg)) as TRes;
 }
 
+function isGlsLikeUrl(url?: string): boolean {
+  return !!url && (
+    url.startsWith(GLS_URL) || url.startsWith('https://login.skku.edu/')
+  );
+}
+
+function isMissingReceiverError(message: string): boolean {
+  return message.includes('Receiving end does not exist')
+    || message.includes('Could not establish connection')
+    || message.includes('message port closed');
+}
+
 /**
  * 탭이 `status: 'complete'` 가 될 때까지 대기 (chrome.tabs.onUpdated 구독).
  * background 탭이라도 정상 로딩되긴 하나, 새로 만든 직후엔 'loading' 상태고
@@ -204,16 +221,70 @@ async function ensureContentReady(tabId: number, timeoutMs = 20000): Promise<Con
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     const tab = await chrome.tabs.get(tabId).catch(() => undefined);
-    const isGlsLike = !!tab?.url && (
-      tab.url.startsWith(GLS_URL) || tab.url.startsWith('https://login.skku.edu/')
-    );
-    if (!isGlsLike || !message.includes('Receiving end does not exist')) {
+    if (!isGlsLikeUrl(tab?.url) || !isMissingReceiverError(message)) {
       throw e;
     }
 
     console.warn('[BG] content script missing; reloading tab once', { tabId, url: tab?.url });
     await chrome.tabs.reload(tabId).catch(() => {});
     return waitForContentReady(tabId, timeoutMs);
+  }
+}
+
+async function waitForBridgeReady(tabId: number, timeoutMs = 12000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let lastMessage = 'unknown';
+  while (Date.now() < deadline) {
+    try {
+      const res = await sendToTab<BgCheckBridge, ContentBridgeState>(tabId, {
+        type: 'BG_CHECK_BRIDGE',
+      });
+      if (res.ready) return;
+      lastMessage = res.error ?? 'bridge not ready';
+    } catch (e) {
+      lastMessage = e instanceof Error ? e.message : String(e);
+    }
+    await new Promise((r) => setTimeout(r, 350));
+  }
+  throw new Error(`main-world bridge not ready in ${timeoutMs}ms: ${lastMessage}`);
+}
+
+async function waitForAutomationReady(tabId: number, timeoutMs = 20000): Promise<ContentSessionState> {
+  const session = await waitForContentReady(tabId, timeoutMs);
+  if (!session.loggedIn) return session;
+  await waitForBridgeReady(tabId, Math.max(4000, Math.min(12000, timeoutMs)));
+  return session;
+}
+
+async function ensureAutomationReady(tabId: number, timeoutMs = 20000): Promise<ContentSessionState> {
+  try {
+    return await waitForAutomationReady(tabId, timeoutMs);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+    if (!isGlsLikeUrl(tab?.url)) {
+      throw e;
+    }
+    if (!isMissingReceiverError(message) && !message.includes('main-world bridge not ready')) {
+      throw e;
+    }
+
+    console.warn('[BG] automation bridge not ready; reloading tab once', { tabId, url: tab?.url, message });
+    await chrome.tabs.reload(tabId).catch(() => {});
+    return waitForAutomationReady(tabId, timeoutMs);
+  }
+}
+
+async function sendToAutomationTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
+  try {
+    return await sendToTab<TReq, TRes>(tabId, msg);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!isMissingReceiverError(message)) {
+      throw e;
+    }
+    await ensureAutomationReady(tabId);
+    return sendToTab<TReq, TRes>(tabId, msg);
   }
 }
 
@@ -295,7 +366,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   // session check — content script 가 로드될 때까지 폴링 (새 탭은 inject 까지 시간 필요).
   let session: ContentSessionState;
   try {
-    session = await ensureContentReady(tabId);
+    session = await ensureAutomationReady(tabId);
   } catch (e) {
     onStatusChange({
       kind: 'error',
@@ -389,16 +460,12 @@ async function searchNext(
 
     let result: ContentAvailabilityResult;
     try {
-      result = await sendToTab<BgCheckAvailability, ContentAvailabilityResult>(state.tabId, {
+      result = await sendToAutomationTab<BgCheckAvailability, ContentAvailabilityResult>(state.tabId, {
         type: 'BG_CHECK_AVAILABILITY',
         candidate,
         date: state.date,
         startHour: state.startHour,
         endHour: state.endHour,
-        // formData 가 미리 있으면 preview 단계에서 폼 채움 (dev panel / 향후 행사메타 collector).
-        formData: state.pendingFormData,
-        startTime: state.startTime,
-        endTime: state.endTime,
       });
     } catch (e) {
       // Transient content error — 로그에 실패로 남기고 다음 후보로.
@@ -483,6 +550,13 @@ export async function continueAfterRejection(
   const state = queues.get(conversationId);
   if (!state) return;
   state.lastProposed = null;
+  try {
+    await sendToAutomationTab<BgClearPreviewForm, { ok: true }>(state.tabId, {
+      type: 'BG_CLEAR_PREVIEW_FORM',
+    });
+  } catch (e) {
+    console.warn('[BG] clear preview form before next candidate failed', e);
+  }
   void persistQueues();
   await searchNext(state, onStatusChange);
 }
@@ -502,23 +576,21 @@ export interface PreviewReservationArgs {
  */
 export async function previewReservationForm(
   args: PreviewReservationArgs,
-): Promise<ContentAvailabilityResult> {
+): Promise<ContentPreviewResult> {
   const state = queues.get(args.conversationId);
   const tabId = state?.tabId ?? (await findOrCreateGlsTab()).id;
   if (tabId === undefined) {
     throw new Error('GLS 탭 ID 확보 실패');
   }
 
-  return sendToTab<BgCheckAvailability, ContentAvailabilityResult>(tabId, {
-    type: 'BG_CHECK_AVAILABILITY',
+  await ensureAutomationReady(tabId);
+  return sendToAutomationTab<BgPreviewReservation, ContentPreviewResult>(tabId, {
+    type: 'BG_PREVIEW_RESERVATION',
     candidate: args.candidate,
     date: args.date,
-    startHour: parseHourFromHHMM(args.startTime),
-    endHour: parseHourFromHHMM(args.endTime),
     formData: args.formData,
     startTime: args.startTime,
     endTime: args.endTime,
-    strictPreview: true,
   });
 }
 
@@ -547,14 +619,15 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
 
   let result: ContentSubmitResult;
   try {
-      result = await sendToTab<BgSubmitReservation, ContentSubmitResult>(tabId, {
-        type: 'BG_SUBMIT_RESERVATION',
-        candidate,
-        formData,
-        date: args.date,
-        startTime: args.startTime,
-        endTime: args.endTime,
-      });
+    await ensureAutomationReady(tabId);
+    result = await sendToAutomationTab<BgSubmitReservation, ContentSubmitResult>(tabId, {
+      type: 'BG_SUBMIT_RESERVATION',
+      candidate,
+      formData,
+      date: args.date,
+      startTime: args.startTime,
+      endTime: args.endTime,
+    });
   } catch (e) {
     onStatusChange({ kind: 'error', message: `제출 메시지 실패: ${(e as Error).message}` });
     return;

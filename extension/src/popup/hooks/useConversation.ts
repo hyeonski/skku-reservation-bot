@@ -174,7 +174,7 @@ export function useConversation(): UseConversationResult {
         if (cancelled || !resp) return;
         if (resp.history?.length) setMessages(resp.history);
         if (resp.status) setStatus(resp.status);
-        if (resp.lastProposed) setCandidate(resp.lastProposed);
+        setCandidate(resp.lastProposed ?? null);
         if (resp.lastFilledSlots) setLastFilledSlots(resp.lastFilledSlots);
         if (resp.pendingFormData) setDraftFormData(resp.pendingFormData);
       } catch {
@@ -362,8 +362,9 @@ export function useConversation(): UseConversationResult {
 
   const previewReservation = useCallback(
     async (formData?: ReservationFormData) => {
-      if (!candidate) return;
+      if (!candidate || busy) return;
       if (formData) setDraftFormData(formData);
+      setBusy(true);
       try {
         const resp = (await sendToBackground({
           type: 'POPUP_PREVIEW_RESERVATION',
@@ -375,9 +376,11 @@ export function useConversation(): UseConversationResult {
         appendAssistant('GLS 모달에 신청서를 미리 채워두었어요. 확인만 하고 실제 제출은 하지 않았습니다.');
       } catch (e) {
         appendAssistant(`폼 미리보기 중 오류: ${(e as Error).message}`);
+      } finally {
+        setBusy(false);
       }
     },
-    [candidate, conversationId, appendAssistant],
+    [candidate, busy, conversationId, appendAssistant],
   );
 
   const listDevSpaces = useCallback(

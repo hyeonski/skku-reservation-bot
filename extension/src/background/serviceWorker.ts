@@ -87,17 +87,40 @@ function getOrCreateContext(conversationId: string): ConversationContext {
   return ctx;
 }
 
+function deriveEndTime(slots: FilledSlots | null | undefined): string | null {
+  if (!slots) return null;
+  if (slots.end_time) return slots.end_time;
+  if (!slots.start_time || slots.duration_min == null) return null;
+  const [hRaw, mRaw] = slots.start_time.split(':');
+  const startMin = Number.parseInt(hRaw ?? '', 10) * 60 + Number.parseInt(mRaw ?? '', 10);
+  if (!Number.isFinite(startMin)) return null;
+  const endMin = (startMin + slots.duration_min) % (24 * 60);
+  const eh = String(Math.floor(endMin / 60)).padStart(2, '0');
+  const em = String(endMin % 60).padStart(2, '0');
+  return `${eh}:${em}`;
+}
+
 function resolveSearchSlots(ctx: ConversationContext): {
   date: string;
   startTime: string;
   endTime: string;
 } | null {
+  const queue = gls.getQueue(ctx.conversationId);
+  if (queue?.date && queue.startTime && queue.endTime) {
+    return {
+      date: queue.date,
+      startTime: queue.startTime,
+      endTime: queue.endTime,
+    };
+  }
+
   const slots = ctx.pendingStart?.slots ?? ctx.lastFilledSlots;
-  if (!slots?.date || !slots.start_time || !slots.end_time) return null;
+  const endTime = deriveEndTime(slots);
+  if (!slots?.date || !slots.start_time || !endTime) return null;
   return {
     date: slots.date,
     startTime: slots.start_time,
-    endTime: slots.end_time,
+    endTime,
   };
 }
 
@@ -516,9 +539,8 @@ async function handlePreview(
     emit({ kind: 'login_required' });
     return;
   }
-  if (!result.available) {
-    const reason = result.conflicts?.[0]?.info ?? '폼 미리보기를 준비하지 못했습니다.';
-    throw new Error(reason);
+  if (!result.ok) {
+    throw new Error(result.error ?? '폼 미리보기를 준비하지 못했습니다.');
   }
 }
 

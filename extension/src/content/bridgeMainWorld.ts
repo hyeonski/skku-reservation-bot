@@ -33,6 +33,23 @@ declare global {
       && (el.offsetParent !== null || el.getClientRects().length > 0);
   }
 
+  function hasVisibleLoginPrompt(): boolean {
+    const nexacroLogin = document.querySelector<HTMLElement>(
+      '[id$=".edtLOGIN_ID"]:not([id$=":icontext"])',
+    );
+    if (isVisible(nexacroLogin)) return true;
+
+    const ssoLogin = document.querySelector<HTMLInputElement>(
+      'input[placeholder="아이디를 입력하세요."]',
+    );
+    if (isVisible(ssoLogin)) return true;
+
+    const password = document.querySelector<HTMLInputElement>(
+      'input[type="password"][placeholder="비밀번호를 입력하세요."]',
+    );
+    return isVisible(password);
+  }
+
   const FIELD_LABEL_META: Record<string, { label: string; occurrence?: number }> = {
     cboHangsaGb: { label: '행사구분' },
     edtSinchungGroup: { label: '주관단체' },
@@ -217,6 +234,53 @@ declare global {
     }
   }
 
+  function resetFilledVisualState(el: HTMLElement): void {
+    el.style.color = '';
+    (el.style as any).webkitTextFillColor = '';
+    el.style.opacity = '';
+    el.style.textAlign = '';
+  }
+
+  function setNativeValue(
+    control: HTMLInputElement | HTMLTextAreaElement,
+    value: string,
+  ): void {
+    const proto =
+      control instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+    if (valueSetter) {
+      valueSetter.call(control, value);
+    } else {
+      control.value = value;
+    }
+  }
+
+  function clearControlValueLikeUser(
+    control: HTMLInputElement | HTMLTextAreaElement,
+  ): void {
+    control.focus();
+    control.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+    control.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    setNativeValue(control, '');
+    control.dispatchEvent(new InputEvent('beforeinput', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+      data: null,
+    }));
+    control.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      inputType: 'deleteContentBackward',
+      data: null,
+    }));
+    control.dispatchEvent(new Event('change', { bubbles: true }));
+    control.blur();
+    control.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+    control.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+    resetFilledVisualState(control);
+  }
+
   function setControlValueLikeUser(
     control: HTMLInputElement | HTMLTextAreaElement,
     value: string,
@@ -224,17 +288,7 @@ declare global {
     control.focus();
     control.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
     control.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
-
-    const proto =
-      control instanceof HTMLTextAreaElement
-        ? HTMLTextAreaElement.prototype
-        : HTMLInputElement.prototype;
-    const valueSetter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-    if (valueSetter) {
-      valueSetter.call(control, '');
-    } else {
-      control.value = '';
-    }
+    setNativeValue(control, '');
     control.dispatchEvent(new InputEvent('beforeinput', {
       bubbles: true,
       inputType: 'deleteContentBackward',
@@ -246,11 +300,7 @@ declare global {
       data: null,
     }));
 
-    if (valueSetter) {
-      valueSetter.call(control, value);
-    } else {
-      control.value = value;
-    }
+    setNativeValue(control, value);
     control.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Process' }));
     control.dispatchEvent(new InputEvent('beforeinput', {
       bubbles: true,
@@ -355,6 +405,13 @@ declare global {
       applyFilledVisualState(target, value, {
         multiline: target.tagName === 'TEXTAREA',
       });
+    }
+  }
+
+  function clearRenderedVisualStateForSuffix(suffix: string): void {
+    const targets = renderedTargetsForSuffix(suffix);
+    for (const target of targets) {
+      resetFilledVisualState(target);
     }
   }
 
@@ -567,6 +624,8 @@ declare global {
   // ---------- 자동화 named operations ----------
 
   const ops: Record<string, (args?: any) => unknown | Promise<unknown>> = {
+    ping: (): true => true,
+
     hasPopupFrame: () => popupKey() !== null,
 
     /**
@@ -581,6 +640,9 @@ declare global {
       let extendedLogged = false;
       while (true) {
         const now = Date.now();
+        if (hasVisibleLoginPrompt()) {
+          throw new Error('LOGIN_REQUIRED');
+        }
         try {
           if (topFrame()) {
             const menu = byIdSuffix('btnM532010000');
@@ -611,6 +673,7 @@ declare global {
      */
     openReservationModal: async (): Promise<true> => {
       if (popupKey()) { console.log('[GLS] modal already open'); return true; }
+      if (hasVisibleLoginPrompt()) throw new Error('LOGIN_REQUIRED');
 
       // 1. 상단 메뉴
       const menu = byIdSuffix('btnM532010000');
@@ -622,6 +685,7 @@ declare global {
       // 2. 서브메뉴 — id suffix 가 텍스트 매칭보다 안정적
       let sub: HTMLElement | null = null;
       for (let i = 0; i < 15; i++) {
+        if (hasVisibleLoginPrompt()) throw new Error('LOGIN_REQUIRED');
         sub = byIdSuffix('btnMenuM000011122');
         if (sub && sub.offsetParent !== null) break;
         await wait(200);
@@ -638,6 +702,7 @@ declare global {
       // 3. 예약신청 버튼 가시 대기 (최대 5s)
       let btn: HTMLElement | null = null;
       for (let i = 0; i < 25; i++) {
+        if (hasVisibleLoginPrompt()) throw new Error('LOGIN_REQUIRED');
         btn = byIdSuffix('btnInsert4');
         if (btn && btn.offsetParent !== null) break;
         await wait(200);
@@ -922,7 +987,10 @@ declare global {
       const prev = cmp.value;
       console.log('[GLS] setComboAndFireChange', args.suffix, prev, '→', args.value);
       cmp.set_value(args.value);
-      const handlerName = `divManage_${args.suffix}_OnChanged`;
+      const handlerName =
+        args.suffix === 'cboHangsaGb'
+          ? 'fn_cboHangsaGb_onChanged'
+          : `divManage_${args.suffix}_OnChanged`;
       const handler = popupForm[handlerName];
       if (typeof handler === 'function') {
         try {
@@ -1115,6 +1183,52 @@ declare global {
     },
 
     /**
+     * preview/재입력 전에 사용자 입력 필드들을 비운다.
+     * 탐색 문맥인 캠퍼스/건물/날짜는 유지하고, 행사 메타와 시간 선택만 리셋한다.
+     */
+    clearManagedFormFields: (): true => {
+      const dm = activeModalDM();
+      const clearTextSuffixes = [
+        'edtSinchungGroup',
+        'edtSinchungEvent',
+        'edtUseNum',
+        'TextArea00',
+      ] as const;
+      for (const suffix of clearTextSuffixes) {
+        const labeledControl = labeledControlForSuffix(suffix);
+        if (labeledControl) {
+          clearControlValueLikeUser(labeledControl);
+        } else {
+          const root = byPopupSuffix(suffix);
+          const control = root?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+          if (control && isVisible(control)) {
+            clearControlValueLikeUser(control);
+          }
+        }
+        const cmp = dm[suffix];
+        if (cmp && typeof cmp.set_value === 'function') {
+          cmp.set_value('');
+        }
+        clearRenderedVisualStateForSuffix(suffix);
+      }
+
+      const clearComboSuffixes = [
+        'cboHangsaGb',
+        'cboResStTime',
+        'cboResEdTime',
+      ] as const;
+      for (const suffix of clearComboSuffixes) {
+        const cmp = dm[suffix];
+        if (cmp && typeof cmp.set_value === 'function') {
+          cmp.set_value('');
+        }
+        clearRenderedVisualStateForSuffix(suffix);
+      }
+
+      return true;
+    },
+
+    /**
      * 보이는 input / textarea 를 실제 사용자 입력처럼 채운다.
      * Nexacro 내부 값도 best-effort로 동기화하되, 행동의 시작점은 DOM 컨트롤이다.
      */
@@ -1180,30 +1294,42 @@ declare global {
 
       const prefix = popupPrefix();
       const cellSel = `div[id^="${prefix}"][id$=".grdCal.body.gridrow_${rowIdx}.cell_${rowIdx}_0"]:not([id$=":icontext"])`;
+      const immediateCell = document.querySelector<HTMLElement>(cellSel);
+      if (immediateCell) {
+        console.log('[GLS] clickSpaceRow ✓ visible row', rowIdx);
+        nexClick(immediateCell);
+        return true;
+      }
+
+      // viewport 밖 row 는 DOM 렌더를 오래 기다리기보다 Nexacro handler를 직접
+      // 호출하는 편이 훨씬 빠르다. 예약현황 가상 스크롤 때문에 offscreen row 에서
+      // 2~3초 이상 멈추는 현상을 줄이기 위한 fast path.
+      const handler = form.grdCal_OnCellClick;
+      if (typeof handler === 'function') {
+        try {
+          await wait(80);
+          handler.call(form, grid, {
+            fromobject: grid,
+            row: rowIdx,
+            cell: 0,
+            col: 0,
+          });
+          console.log('[GLS] clickSpaceRow ✓ handler fast-path row', rowIdx);
+          return true;
+        } catch (handlerErr) {
+          console.warn('[GLS] grdCal_OnCellClick fast-path failed', handlerErr);
+        }
+      }
+
       let cell: HTMLElement | null = null;
-      const deadline = Date.now() + 2500;
+      const deadline = Date.now() + 700;
       while (Date.now() < deadline) {
         cell = document.querySelector<HTMLElement>(cellSel);
         if (cell) break;
         await wait(120);
       }
       if (!cell) {
-        const handler = form.grdCal_OnCellClick;
-        if (typeof handler === 'function') {
-          try {
-            handler.call(form, grid, {
-              fromobject: grid,
-              row: rowIdx,
-              cell: 0,
-              col: 0,
-            });
-            console.log('[GLS] clickSpaceRow ✓ handler fallback row', rowIdx);
-            return true;
-          } catch (handlerErr) {
-            console.warn('[GLS] grdCal_OnCellClick fallback failed', handlerErr);
-          }
-        }
-        throw new Error('grdCal cell not found for row ' + rowIdx + ' (virtualized, scroll failed)');
+        throw new Error('grdCal cell not found for row ' + rowIdx + ' (virtualized, handler unavailable)');
       }
       console.log('[GLS] clickSpaceRow ✓ row', rowIdx);
       nexClick(cell);

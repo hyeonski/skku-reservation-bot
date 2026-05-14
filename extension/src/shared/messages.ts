@@ -110,6 +110,10 @@ export interface BgCheckSession {
   type: 'BG_CHECK_SESSION';
 }
 
+export interface BgCheckBridge {
+  type: 'BG_CHECK_BRIDGE';
+}
+
 export interface BgCheckAvailability {
   type: 'BG_CHECK_AVAILABILITY';
   candidate: SpaceCandidate;
@@ -136,11 +140,30 @@ export interface BgSubmitReservation {
   endTime: string;
 }
 
+export interface BgClearPreviewForm {
+  type: 'BG_CLEAR_PREVIEW_FORM';
+}
+
+export interface BgPreviewReservation {
+  type: 'BG_PREVIEW_RESERVATION';
+  candidate: SpaceCandidate;
+  formData: ReservationFormData;
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
 // ---------- content → background ----------
 
 export interface ContentSessionState {
   type: 'CONTENT_SESSION_STATE';
   loggedIn: boolean;
+}
+
+export interface ContentBridgeState {
+  type: 'CONTENT_BRIDGE_STATE';
+  ready: boolean;
+  error?: string;
 }
 
 export interface ContentAvailabilityResult {
@@ -155,6 +178,14 @@ export interface ContentSubmitResult {
   type: 'CONTENT_SUBMIT_RESULT';
   ok: boolean;
   spaceCode: string;
+  error?: string;
+}
+
+export interface ContentPreviewResult {
+  type: 'CONTENT_PREVIEW_RESULT';
+  ok: boolean;
+  spaceCode: string;
+  loginRequired?: boolean;
   error?: string;
 }
 
@@ -191,13 +222,18 @@ export type BackgroundToPopup =
 
 export type BackgroundToContent =
   | BgCheckSession
+  | BgCheckBridge
   | BgCheckAvailability
-  | BgSubmitReservation;
+  | BgSubmitReservation
+  | BgClearPreviewForm
+  | BgPreviewReservation;
 
 export type ContentToBackground =
   | ContentSessionState
+  | ContentBridgeState
   | ContentAvailabilityResult
-  | ContentSubmitResult;
+  | ContentSubmitResult
+  | ContentPreviewResult;
 
 export type AnyMessage =
   | PopupToBackground
