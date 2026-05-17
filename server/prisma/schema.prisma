@@ -41,13 +41,18 @@ model Conversation {
   history         Json
   lastIntent      String?            @map("last_intent") @db.VarChar(40)
   lastFilledSlots Json?              @map("last_filled_slots")
+  lastApplicationState Json?         @map("last_application_state")
+  confirmedReservationForm Json?     @map("confirmed_reservation_form")
+  confirmedReservationLabel String?  @map("confirmed_reservation_label") @db.VarChar(191)
 
   startedAt   DateTime  @default(now()) @map("started_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
   completedAt DateTime? @map("completed_at")
+  deletedAt   DateTime? @map("deleted_at")
 
   @@index([clientId, updatedAt])
   @@index([status, updatedAt])
+  @@index([clientId, deletedAt, updatedAt])
   @@map("conversation")
 }
 

@@ -144,7 +144,7 @@ skku-reservation-bot/
   3. 채팅으로 수집된 조건(날짜·시간·인원·건물 등)을 토대로 **공간 후보군 조회**
   4. 후보 공간 각각의 **예약 가능 여부 확인** (시간표 조회)
   5. 선택된 공간에 대해 **예약 신청 폼 작성 및 제출**
-- **영향**: `extension/src/content/`에 DOM 시퀀스를 단계별 함수로 분리. 셀렉터는 `selectors.ts`로 모음. GLS PoC가 P1 개발의 선결 작업.
+- **영향**: 현재 구현은 `extension/src/content/bridgeMainWorld.ts` + `glsAgent.ts`를 중심으로 DOM/Nexacro 시퀀스를 분리한다. 초기 `selectors.ts` 가정은 D-017 개정으로 폐기되었다.
 
 ---
 
@@ -171,7 +171,7 @@ skku-reservation-bot/
 - **결정**: Phase 1은 아래 흐름으로 동작한다. **"예약 자동화 end-to-end가 동작한다"** 가 P1의 최우선 목표이며, 우선순위 알고리즘·반려 처리 등 부가 로직은 모두 후순위.
 
 ### 대화 슬롯 채우기 (멀티턴)
-필수 슬롯: `날짜`, `시작시간`, `종료시간`(또는 `duration`), `인원`.
+필수 탐색 슬롯: `날짜`, `시작시간`, `종료시간`(또는 `duration`), `인원`.
 1. 사용자: "언제 공간 예약해줘"
 2. 봇: "몇 명인가요?"
 3. 사용자: "○명"
@@ -181,11 +181,22 @@ skku-reservation-bot/
 > 사용자의 최초 발화에 슬롯이 일부 또는 전부 포함될 수도 있다. LLM은 누락된 슬롯만 식별해 되묻는다.
 
 ### 탐색·예약 시퀀스
-1. **DB 필터**: 인원에 맞는 공간 후보 리스트를 DB에서 추출.
-2. **순회**: 후보 리스트를 순서대로(P1은 우선순위 알고리즘 미적용) 하나씩 GLS에서 예약 가능 여부 조회.
-3. **첫 가능 공간 발견 시**: 사용자에게 "○○ 공간이 가능합니다. 예약할까요?" 질문 → 사용자 확인 시 예약 진행.
-4. **불가능 시**: 다음 후보로 이동.
-5. **모두 불가능 시**: "조건에 맞는 공간이 없습니다" 응답 + 다른 액션 유도 채팅 (조건 조정 제안 등).
+1. **DB 필터**: 인원에 맞는 공간 후보 리스트를 DB에서 추출. 캠퍼스·건물·공간 자연어 슬롯이 있으면 함께 필터링한다.
+2. **순회**: 후보 리스트를 하나씩 GLS에서 예약 가능 여부 조회. 현재 구현은 데모 편의상 서버 후보를 1회 shuffle 한 뒤 직렬 검증한다.
+3. **첫 가능 공간 발견 시**: 채팅 아래 별도 추천 카드에 공간 요약을 표시한다. 후보 리스트를 채팅 로그에 길게 누적하지 않는다.
+4. **신청 메타 수집**: 신청서에 필요한 `행사구분`, `주관단체`, `행사명`, `사용목적`은 탐색 슬롯과 분리해 다룬다.
+5. **초안 생성**: 사용자의 현재/직전 발화에 단체/행사 설명이 있으면 바로 신청 초안을 만들고, 없으면 "신청서에는 어떤 단체의 어떤 행사로 넣을까요?" 같은 상위 질문 1회로 수집한다.
+6. **과거 대화 재사용**: 완료된 과거 대화의 확정 신청 정보는 새 대화에서 `추천만` 할 수 있다. 자동 적용은 하지 않고, 사용자가 수락한 경우에만 초안으로 복사한다.
+7. **수정 방식**: 신청 메타 수정은 인라인 폼이 아니라 채팅 명령으로만 처리한다. 예: "행사명은 운영위원회 회의로", "주관단체는 총학생회로".
+8. **제출**: 사용자가 카드에서 요약 초안을 확인하면 GLS 신청서를 자동 작성하고 제출한다.
+9. **불가능 시**: 다음 후보로 이동.
+10. **모두 불가능 시**: "조건에 맞는 공간이 없습니다" 응답 + 다른 액션 유도 채팅 (조건 조정 제안 등).
+
+### 세션 UX
+- popup은 초기화 버튼 대신 **대화 선택 버튼**으로 최근 대화 10개를 보여준다.
+- 새 대화는 버튼을 누르는 즉시 목록에 생기지 않고, **첫 메시지가 전송된 순간** 세션 이력에 등록된다.
+- 각 대화는 독립 `conversation_id`를 가지며, 활성 세션 전환 시 popup snapshot을 복원한다.
+- 대화 이력은 삭제 가능하며, 삭제된 대화는 신청 메타 추천에도 다시 쓰지 않는다.
 
 ### P1에서 의도적으로 빼는 것
 - 우선순위 알고리즘 (선호 기반 정렬 등 — Phase 2로)
@@ -216,12 +227,12 @@ skku-reservation-bot/
 - **배경**:
   - 수동 수집(옵션 B)은 학교 자료가 분산되어 있고 정원 정보가 산발적임.
   - Lazy seeding(옵션 C)은 첫 사용자 경험이 비어 있어 P1 데모가 어려움.
-  - D-010에서 어차피 GLS DOM 자동화 자산이 만들어지므로 동일 셀렉터/파서를 재사용 가능.
+  - D-010에서 어차피 GLS DOM 자동화 자산이 만들어지므로, 최소한 경로 상수와 데이터셋 타입은 재사용하는 편이 낫다.
 - **위치**: `server/scripts/scrape-spaces.ts` (또는 별도 `scripts/` 최상위 — 아래 미결).
 - **출력**: `Space` 테이블에 upsert. 멱등하게 동작해야 함(여러 번 돌려도 중복 없음).
 - **영향**:
   - 시딩 완료가 P1 end-to-end 동작의 선결 조건.
-  - 셀렉터·파서를 확장과 공유할 수 있도록, 가능하면 **`extension/src/content/`의 파서 모듈을 서버 스크립트에서도 import**하는 구조를 검토. 안 되면 동일 셀렉터 상수만 공유.
+  - 현재 구현 기준 공유 범위는 `shared/gls/`의 경로 상수 + 데이터셋 타입까지다. 자동화 함수 본체는 실행 환경 차이로 공유하지 않는다(D-017 개정).
 
 ### 시딩 스크립트의 sub-결정 (모두 확정, 2026-05-12)
 
@@ -229,7 +240,7 @@ skku-reservation-bot/
    - 함의: 스크립트는 쿠키를 인자/환경변수로 받아 HTTP 요청 또는 헤드리스 브라우저로 GLS DOM을 순회한다. dotenv에 ID/PW를 두지 않는다.
 2. **스크립트 위치: `server/scripts/`**. Prisma 클라이언트·DB 커넥션·tsconfig를 그대로 재사용. 별도 패키지 분리 없음.
 3. **데이터 갱신 주기: 개발자 판단으로 수동 재실행**. 학기마다 최소 1회 돌리는 것을 목표로 하되 자동 스케줄은 두지 않음. 스크립트는 멱등 upsert로 작성.
-4. **셀렉터·파서 공유 전략: 공유 (tsconfig paths 방식)**. `shared/gls/`에 셀렉터·파서를 두고 `extension/`, `server/`가 각자의 `tsconfig.json`에 `paths` 매핑(`@gls/*` → `../shared/gls/*`)을 설정해 import. D-016 빌드 도구 결정과 결합되어 자연스럽게 동작.
+4. **공유 전략: 부분 공유 (tsconfig paths 방식)**. `shared/gls/`에는 Nexacro 경로 상수와 데이터셋 타입만 두고, `extension/`, `server/`가 각자의 `tsconfig.json`에 `paths` 매핑(`@gls/*` → `../shared/gls/*`)을 설정해 import한다. 자동화 함수 본체는 각 실행 환경에 인라인 유지한다 (D-017 개정).
 
 ---
 
@@ -287,9 +298,9 @@ skku-reservation-bot/
 - **일자**: 2026-05-12
 - **결정**:
   - 진행 중인 멀티턴 대화의 **진실의 원천은 확장(클라)**이 들고 있는 history 배열이다.
-  - `/parse` 요청은 매번 `{ conversation_id, history, latest_message }`를 self-contained로 보낸다.
+  - `/parse` 요청은 매번 `{ conversation_id, history, now }`를 self-contained로 보낸다.
   - 서버는 매 턴 `conversations` 테이블에 그 시점까지의 history를 upsert(mirror)한다. status 필드: `active | completed | abandoned_user | abandoned_timeout`.
-  - 정상 완료 시 `completed`, 사용자 명시적 중단 시 `abandoned_user`, 다음 세션 진입 시 옛 `active` 발견하면 사용자에게 "이어할까요/버릴까요?" 안내 후 마킹.
+  - 정상 완료 시 `completed`, 사용자 명시적 중단 시 `abandoned_user`로 마킹한다.
 - **배경**:
   - 순수 (A) 모델(완료 시점에만 적재)은 브라우저 비정상 종료/에러로 중단된 대화를 서버가 전혀 모름. P2 선호 학습·깔때기 분석에 손실.
   - 서버가 진행 중 상태의 권위를 갖는 (B) 모델은 DB 장애 시 진행 중 대화가 즉시 중단되고 동시성 처리 부담이 큼.
@@ -297,7 +308,8 @@ skku-reservation-bot/
 - **영향**:
   - `Conversation` 모델 추가: `id`, `client_id`(UUID FK), `status`, `history`(JSON), `started_at`, `updated_at`, `completed_at?`.
   - 요청 payload에 history 배열 포함 → P1 슬롯필링 5턴 내외 가정상 크기 부담 무시.
-  - abandoned timeout 자동 마킹(cron)은 P1엔 안 함. 다음 세션 진입 시 클라가 발견·물어보는 방식으로 처리.
+  - abandoned timeout 자동 마킹(cron)은 P1엔 안 함.
+  - 현재 구현의 복원 범위는 popup snapshot + `chrome.storage.session` 기반 재수화까지이며, 서버에 남아 있는 오래된 `active` 대화를 다시 물어보는 UX는 아직 없다.
 
 ---
 
@@ -306,7 +318,7 @@ skku-reservation-bot/
 - **일자**: 2026-05-12
 - **결정**: D-009의 UUID를 모든 서버 요청에 `X-Client-Id` HTTP 헤더로 실어 보낸다. body 필드로 두지 않는다.
 - **배경**: 라우트마다 body 스키마가 다르므로 헤더로 통일하면 Fastify 훅 한 곳에서 인증/로깅/메트릭 처리 가능. REST 컨벤션에도 부합.
-- **영향**: 서버 측 글로벌 `onRequest` 훅에서 `X-Client-Id` 검증·request.context 주입. 라우트 핸들러는 `req.clientId`로 접근.
+- **영향**: 서버 측 글로벌 `onRequest` 훅에서 `X-Client-Id` 검증·`Client` upsert·`req.clientId` 주입을 수행한다. 라우트 핸들러는 `req.clientId`로 접근.
 
 ---
 
@@ -552,14 +564,20 @@ model Conversation {
 
 | 메서드·경로 | 용도 | 헤더 |
 |---|---|---|
-| `POST /parse` | 채팅 파싱 (D-021) | `X-Client-Id` |
-| `POST /conversations` | 대화 mirror 생성/업데이트 (D-018) | `X-Client-Id` |
+| `GET /health` | 헬스체크 | - |
+| `POST /parse` | 채팅 파싱 + 신청 메타 상태 계산 | `X-Client-Id` |
+| `GET /conversations` | 최근 대화 10개 요약 목록 | `X-Client-Id` |
+| `POST /conversations/:id` | 대화 mirror 생성/업데이트 (D-018) | `X-Client-Id` |
 | `GET /conversations/:id` | 이어가기 — 과거 대화 fetch | `X-Client-Id` |
 | `POST /conversations/:id/abandon` | 사용자 명시적 중단 마킹 | `X-Client-Id` |
+| `DELETE /conversations/:id` | 대화 논리 삭제 | `X-Client-Id` |
 | `GET /spaces` | 인원·캠퍼스·건물 필터로 후보 조회 (D-013 1단계) | `X-Client-Id` |
 
 - 모든 라우트는 `onRequest` 훅에서 `X-Client-Id` 검증·`Client` upsert·`req.clientId` 주입.
 - 소유권 검증(D-021): conversations 라우트는 `conversation.clientId === req.clientId` 확인. 불일치 시 403.
+- `POST /parse` 응답은 기존 intent/slot 정보에 더해 `application_state`를 포함한다. 여기에는 신청서 초안(`draft`), 누락 신청 필드, 추가 수집 필요 여부, 과거 대화 기반 추천 초안, 분류 확신도 정보가 들어간다.
+- `GET /conversations` 는 `deletedAt IS NULL` 인 대화만 최신순으로 10개 반환한다. popup 대화 선택기에서 제목·상태·미리보기 구성에 사용한다.
+- `DELETE /conversations/:id` 는 논리 삭제이며, 삭제된 대화는 목록 복원과 신청 메타 추천 양쪽에서 제외한다.
 - `GET /spaces` 쿼리 파라미터: `headcount`(인원으로 `capacityMin <= headcount <= capacityMax` 필터), `campusCode`, `buildingNo`, `userOrgCode?`(사용자 소속 코드 — `useJojikCode` 매칭으로 우선 공간 표시). Zod 검증.
 - `GET /spaces` 응답에는 D-022의 `useJojikName`, `contents`, `capacityMin/Max`, `limitTimeHHMM`를 포함해 채팅 UI에서 후보 안내 시 함께 노출.
 
@@ -591,26 +609,27 @@ model Conversation {
 ### 메시지 흐름 (대표 예시)
 
 ```
-popup → background: PARSE_REQUEST { history }
+popup → background: POPUP_CHAT_REQUEST { history }
 background → server:  POST /parse
-background → popup:   PARSE_RESPONSE { filled_slots, assistant_message, ready_to_search }
+background → popup:   BG_CHAT_RESPONSE { filled_slots, assistant_message, ready_to_search }
 
-popup → background: START_SEARCH { slots }
-background → content (GLS 탭): GLS_SEARCH { slots }
-content → background: GLS_CANDIDATE_FOUND { space } | GLS_NO_CANDIDATE
-background → popup: CONFIRM_RESERVATION { space }
+popup → background: POPUP_START_SEARCH { slots }
+background → content (GLS 탭): BG_CHECK_AVAILABILITY { candidate, date, startHour, endHour }
+content → background: CONTENT_AVAILABILITY_RESULT
+background → popup: BG_CANDIDATE_PROPOSAL { candidate }
 
-popup → background: CONFIRM { yes }
-background → content: GLS_SUBMIT { space, formData }
-content → background: GLS_SUBMIT_RESULT { ok, ... }
-background → popup + notifications: 결과 표시
+popup → background: POPUP_PREVIEW_RESERVATION | POPUP_CONFIRM_RESERVATION
+background → content: BG_PREVIEW_RESERVATION | BG_SUBMIT_RESERVATION
+content → background: CONTENT_PREVIEW_RESULT | CONTENT_SUBMIT_RESULT
+background → popup: BG_STATUS_UPDATE / BG_RESERVATION_DONE
 ```
 
 ### 타입 정의 위치
 `extension/src/shared/messages.ts`에 TypeScript discriminated union으로 모음. 양쪽이 동일한 타입 import.
 
 ### 영향
-- popup이 닫혀도 background SW가 자동화 계속 진행. 완료 시 `chrome.notifications`로 사용자에게 알림.
+- popup이 닫혀도 background SW가 자동화를 계속 진행할 수 있다.
+- 완료 시 `chrome.notifications`로 사용자에게 알림한다. 진행 중 세부 상태는 popup 재오픈 시 `chrome.storage.session`에서 복원한다.
 - content script ↔ background는 `chrome.tabs.sendMessage`/`chrome.runtime.onMessage`로 통신.
 - background는 활성 자동화 세션을 메모리에 들고 있을 수 있으나, MV3 SW가 idle 종료될 수 있으므로 진행 상태는 `chrome.storage.session`에 함께 mirror.
 
@@ -622,17 +641,17 @@ background → popup + notifications: 결과 표시
 - **결정**:
 
 ### 탭 진입
-1. `chrome.tabs.query`로 GLS 도메인 탭 검색
-2. 있으면 재사용 (필요 시 활성화)
-3. 없으면 `chrome.tabs.create`로 새 탭 생성
+1. 현재 활성 탭이 이미 GLS면 그대로 재사용
+2. 아니면 사용자 확인 후 현재 활성 탭의 URL을 GLS로 전환
+3. 강제 새 탭은 Dev/특수 경로에서만 사용
 
 ### 비활성 탭 처리 원칙
 - **기본은 비활성 탭에서도 자동화 시도**. content script는 비활성 탭에서도 살아있고 대부분 DOM 조작 가능.
-- 단계별 검증 실패(셀렉터 timeout, navigation 실패 등) 감지 시 **활성화 안내로 fallback**: popup·notifications로 "GLS 탭이 활성 상태가 아니어서 진행이 어렵습니다. 활성화할까요?" → 사용자 클릭 시 `chrome.tabs.update({active: true})`.
+- 단계별 검증 실패(셀렉터 timeout, navigation 실패 등) 감지 시 **활성화 안내로 fallback**: popup에서 "GLS 탭이 활성 상태가 아니어서 진행이 어렵습니다. 활성화할까요?" 같은 안내를 띄우고, 사용자 클릭 시 `chrome.tabs.update({active: true})`.
 - 구체 fallback 트리거 기준(어떤 단계 실패에서 안내할지)은 PoC 결과 보고 D-027 보강.
 
 ### 영향
-- popup이 닫힌 채 background SW가 자동화 진행 중에도 동작. 사용자는 `chrome.notifications`로 진행 상태 받음.
+- popup이 닫힌 채 background SW가 자동화 진행 중에도 동작. 사용자는 완료 시 `chrome.notifications`를 받고, 중간 상태는 popup 재오픈 시 확인한다.
 - content script가 step별로 idempotent하게 작성되어야 함 (재시도 가능).
 
 ---

@@ -17,7 +17,6 @@ import {
   FilledSlots,
   Intent,
   type ChatMessage,
-  type ParseResponse,
 } from '../schemas/parse.js';
 import { SYSTEM_PROMPT, renderFewShotBlock } from './prompts.js';
 
@@ -37,7 +36,7 @@ const LLMOutput = z.object({
   assistant_message: z.string(),
 });
 
-export type LLMParseResult = Omit<ParseResponse, 'conversation_id'>;
+export type LLMParseResult = z.infer<typeof LLMOutput>;
 
 let cachedClient: OpenAI | null = null;
 

@@ -8,6 +8,8 @@ export const ListSpacesQuery = z.object({
   headcount: z.coerce.number().int().positive(),
   campusCode: z.string().optional(),
   buildingNo: z.string().optional(),
+  building: z.string().optional(),
+  space: z.string().optional(),
   userOrgCode: z.string().optional(), // 사용자 소속 — useJojikCode 매칭 우선
 });
 export type ListSpacesQuery = z.infer<typeof ListSpacesQuery>;

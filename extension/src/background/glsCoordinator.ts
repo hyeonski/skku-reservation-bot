@@ -15,9 +15,11 @@
 import type {
   FilledSlots,
   AutomationStatus,
+  ReservationFormData,
   SpaceCandidate,
   SearchLogEntry,
 } from '../shared/types';
+import { CAMPUS_CODES } from '@gls/nexacroPaths';
 import type {
   BgCheckBridge,
   BgCheckSession,
@@ -31,7 +33,6 @@ import type {
   ContentPreviewResult,
   ContentSubmitResult,
   BgCandidateProposal,
-  ReservationFormData,
 } from '../shared/messages';
 import * as apiClient from './apiClient';
 
@@ -130,6 +131,25 @@ async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
   // content script + nexacro 가 정상 동작 (검증 2026-05-13). 사용자가 진행을 보고
   // 싶으면 수동으로 탭 전환.
   return chrome.tabs.create({ url: GLS_URL, active: false });
+}
+
+export async function revealOrCreateGlsTab(): Promise<chrome.tabs.Tab> {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (activeTab?.url?.startsWith(GLS_URL) && activeTab.id !== undefined) {
+    return chrome.tabs.update(activeTab.id, { active: true });
+  }
+
+  const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
+  const reusable = existingTabs.find((tab) => tab.id !== undefined) ?? null;
+  if (reusable?.id !== undefined) {
+    const updated = await chrome.tabs.update(reusable.id, { active: true });
+    if (updated.windowId !== undefined) {
+      await chrome.windows.update(updated.windowId, { focused: true }).catch(() => {});
+    }
+    return updated;
+  }
+
+  return chrome.tabs.create({ url: GLS_URL, active: true });
 }
 
 async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
@@ -288,14 +308,34 @@ async function sendToAutomationTab<TReq, TRes>(tabId: number, msg: TReq): Promis
   }
 }
 
-function pickFirstCampusBuilding(slots: FilledSlots): { campusCode?: string; buildingNo?: string } {
-  // slots.building is a free-form name string per types.ts; without a resolver we
-  // pass nothing here. Server-side filtering by building/campus can be wired
-  // later once a name→code lookup is in place.
-  if (slots.building) {
-    // Intentionally no-op for now; placeholder for future resolver.
+function pickSearchFilters(
+  slots: FilledSlots,
+): { campusCode?: string; buildingNo?: string; building?: string; space?: string } {
+  const campusCode = resolveCampusCode(slots.campus);
+  return {
+    ...(campusCode ? { campusCode } : {}),
+    ...(slots.building ? { building: slots.building.trim() } : {}),
+    ...(slots.space ? { space: slots.space.trim() } : {}),
+  };
+}
+
+function resolveCampusCode(campus: string | null): string | undefined {
+  const normalized = normalizeCampusKeyword(campus);
+  if (!normalized) return undefined;
+
+  if (/(자연과학|자과|율전)/.test(normalized)) {
+    return CAMPUS_CODES.자연과학캠퍼스;
   }
-  return {};
+  if (/(인문사회과학|인사|명륜)/.test(normalized)) {
+    return CAMPUS_CODES.인문사회과학캠퍼스;
+  }
+  return undefined;
+}
+
+function normalizeCampusKeyword(campus: string | null): string {
+  return String(campus ?? '')
+    .replace(/\s+/g, '')
+    .trim();
 }
 
 function parseHourFromHHMM(hhmm: string | null): number {
@@ -380,7 +420,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
-  // fetch candidates (또는 dev 주입 사용)
+  // fetch candidates (사전 주입 후보가 있으면 우선 사용)
   let candidates: SpaceCandidate[];
   let preserveCandidateOrder = false;
   if (args.candidates && args.candidates.length > 0) {
@@ -390,7 +430,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     try {
       candidates = await apiClient.listSpaces({
         headcount: slots.headcount,
-        ...pickFirstCampusBuilding(slots),
+        ...pickSearchFilters(slots),
       });
     } catch (e) {
       onStatusChange({ kind: 'error', message: `후보 조회 실패: ${(e as Error).message}` });

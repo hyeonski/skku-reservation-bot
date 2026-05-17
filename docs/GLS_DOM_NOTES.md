@@ -399,7 +399,10 @@ PRD §1-2 ②의 "반려 리스크"는 결국 이 USE_JOJIK + 행사 적합성 �
 //    - 클릭은 좌표 기반 또는 grdCal_OnCellClick(row, col=0) 호출
 // 5. dsGrdSub의 행 중 [startHour, endHour]와 TM_TERM이 겹치는 게 있는지 판정
 //    - 수업/예약/대여 GUBUN 모두 conflict
-//    - INFO2에서 시작/종료 일을 보고 해당 날짜에 활성인지 확인
+//    - 수업: INFO2가 "2026/05/18~2026/05/24" 같은 기간 문자열일 수 있으므로,
+//      요청일이 그 기간 안에 들어오면 conflict
+//    - 예약/대여: INFO2가 "(승인)" 같은 상태 문자열일 수 있으므로 기간 파싱에만 의존하면 안 됨.
+//      현재 선택 날짜 문맥에서 로드된 row라면 TM_TERM 겹침만으로 conflict
 // 6. 첫 번째 가용 공간 찾으면 사용자에게 confirm → save
 ```
 

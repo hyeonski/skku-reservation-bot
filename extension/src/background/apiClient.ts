@@ -4,7 +4,16 @@
  * 모든 요청에 X-Client-Id 헤더 자동 부착 (getOrCreateClientId).
  */
 
-import type { ParseResult, SpaceCandidate, ChatMessage, FilledSlots, Intent } from '../shared/types';
+import type {
+  ParseResult,
+  SpaceCandidate,
+  ChatMessage,
+  FilledSlots,
+  Intent,
+  ApplicationState,
+  ReservationFormData,
+  ConversationStatus,
+} from '../shared/types';
 import { getOrCreateClientId } from '../shared/clientId';
 
 export const SERVER_BASE_URL = 'http://localhost:3000';
@@ -15,18 +24,29 @@ export interface ParseArgs {
   now?: string; // ISO; default = new Date().toISOString()
 }
 
-export type ConversationStatus = 'active' | 'completed' | 'abandoned_user' | 'abandoned_timeout';
-
 export interface ConversationDto {
   id: string;
-  clientId: string;
   status: ConversationStatus;
   history: ChatMessage[];
   lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
+  lastApplicationState: ApplicationState | null;
+  confirmedReservationForm: ReservationFormData | null;
+  confirmedReservationLabel: string | null;
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
+}
+
+export interface ConversationSummaryDto {
+  id: string;
+  status: ConversationStatus;
+  updatedAt: string;
+  completedAt: string | null;
+  firstUserMessage: string | null;
+  lastMessagePreview: string | null;
+  lastFilledSlots: FilledSlots | null;
+  confirmedReservationLabel: string | null;
 }
 
 export interface UpsertConversationBody {
@@ -34,12 +54,17 @@ export interface UpsertConversationBody {
   status?: ConversationStatus;
   lastIntent?: Intent | null;
   lastFilledSlots?: FilledSlots | null;
+  lastApplicationState?: ApplicationState | null;
+  confirmedReservationForm?: ReservationFormData | null;
+  confirmedReservationLabel?: string | null;
 }
 
 export interface ListSpacesArgs {
   headcount: number;
   campusCode?: string;
   buildingNo?: string;
+  building?: string;
+  space?: string;
   userOrgCode?: string;
 }
 
@@ -100,6 +125,18 @@ export async function getConversation(id: string): Promise<ConversationDto> {
   });
 }
 
+export async function listConversations(): Promise<ConversationSummaryDto[]> {
+  return request<ConversationSummaryDto[]>('/conversations', {
+    method: 'GET',
+  });
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  return request<void>(`/conversations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function abandonConversation(id: string): Promise<ConversationDto> {
   return request<ConversationDto>(`/conversations/${encodeURIComponent(id)}/abandon`, {
     method: 'POST',
@@ -111,6 +148,8 @@ export async function listSpaces(args: ListSpacesArgs): Promise<SpaceCandidate[]
   params.set('headcount', String(args.headcount));
   if (args.campusCode) params.set('campusCode', args.campusCode);
   if (args.buildingNo) params.set('buildingNo', args.buildingNo);
+  if (args.building) params.set('building', args.building);
+  if (args.space) params.set('space', args.space);
   if (args.userOrgCode) params.set('userOrgCode', args.userOrgCode);
   return request<SpaceCandidate[]>(`/spaces?${params.toString()}`, { method: 'GET' });
 }

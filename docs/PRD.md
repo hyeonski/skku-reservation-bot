@@ -1,6 +1,6 @@
 # 교내 공간 예약 에이전트 — PRD 요약
 
-> 최종 수정: 2026-05-02
+> 최종 수정: 2026-05-15
 > 본 문서는 팀 통합 PRD를 읽고 이해한 내용을 정리한 것이다.
 
 ---
@@ -45,11 +45,11 @@
 ## 3. 사용자 플로우
 
 ### 시나리오 A — 일반 예약 (Phase 1)
-1. 확장 아이콘 또는 포털 내 플로팅 버튼으로 진입
+1. 확장 아이콘 popup으로 진입
 2. 자연어 입력 ("다음 주 화요일 6시 20명 학생회 회의")
-3. 에이전트가 조건 파싱 → 빈 공간 탐색 → 인원 맞춤 추천
-4. 사용자 확인 (재탐색 요청 시 맥락 유지하며 대안 제시)
-5. 포털 폼 자동 작성 및 신청 → 완료 알림
+3. 에이전트가 조건 파싱 → 인원 조건 기반 후보 탐색
+4. 사용자 확인 + 행사 메타(행사구분/주관단체/행사명/사용목적) 입력
+5. 포털 폼 자동 작성, 필요 시 미리보기 후 신청 → 완료 알림
 - 세션 없으면 3단계 전에 로그인 페이지 안내
 
 ### 시나리오 B — 정기 예약 (Phase 3~4)
@@ -84,12 +84,17 @@
 - **인증 정보는 서버에 저장 안 함**. 포털 조작은 사용자 브라우저에서, 세션은 로컬에만.
 - 서버는 LLM 프록시 + 데이터 저장 + 스케줄 트리거에 한정.
 
-### 스택 (제안)
-- LLM: 미정 (DeepSeek, Kimi K 2.5 등 저비용 우선 검토)
-- 서버: Python + FastAPI
-- 자동화: Chrome Extension API (chrome.scripting/tabs, content scripts)
-- 알림: Web Push 또는 폴링 → chrome.notifications
-- 저장: 서버 DB + chrome.storage (로컬 캐시)
+### 스택 (현재 구현)
+- LLM: DeepSeek-Chat (`deepseek-chat`, OpenAI 호환 API)
+- 서버: TypeScript + Fastify + Prisma + MySQL
+- 자동화: Chrome Extension API + background service worker + content script + main-world bridge
+- 알림: `chrome.notifications` (예약 완료 시점)
+- 저장: MySQL(`Client`/`Conversation`/`Space`) + `chrome.storage.local/session`
+
+### 현재 구현 메모
+- 진입점은 popup 기준이며, 포털 내 플로팅 버튼은 아직 구현되지 않음
+- 후보 공간은 `/spaces`에서 인원 기준으로 추린 뒤 GLS에서 직렬 검증
+- 개인화/정기예약/반려 감지 플로우는 아직 구현 범위 밖
 
 ### 주요 챌린지
 - **P1**: DOM 자동화 안정성 (드롭다운/달력), 세션 감지, LLM 파싱 정확도(자연어→폼 선택지 매핑), 외부 예약 시스템 구조 통합, race condition
@@ -154,5 +159,3 @@
 | 6/10~6/22 | 영상 제출 및 최종 발표 | - |
 
 > P4(스케줄링), P5(영역 확대)는 학기 내 미포함 — 향후 계획으로 발표에서 언급.
-
-

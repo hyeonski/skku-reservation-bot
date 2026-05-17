@@ -10,8 +10,7 @@
 
 import { GLS_HOME_URL, LOGIN_URL_PREFIX } from '@gls/nexacroPaths';
 import type { SpaceScheduleRow } from '@gls/schemas';
-import type { ReservationFormData } from '../shared/messages';
-import type { SpaceCandidate } from '../shared/types';
+import type { ReservationFormData, SpaceCandidate } from '../shared/types';
 import { runInPage } from './contentScript';
 import { fillForm } from './formFiller';
 
@@ -305,7 +304,7 @@ export async function checkAvailability(
   const conflicts = computeConflicts(schedule, yyyymmdd, startHour, endHour);
   console.log('[GLS-iso] checkAvailability done — conflicts:', conflicts.length);
 
-  // Preview: formData 가 미리 제공된 경우 (dev panel / 행사메타 collector) 폼 전체를
+  // Preview: formData 가 미리 제공된 경우 폼 전체를
   // 채워서 사용자가 GLS 탭에서 시각적으로 검증할 수 있게 한다. 저장은 별도 단계.
   if (options?.formData && conflicts.length === 0) {
     console.log('[GLS-iso] step: fillForm preview');
@@ -338,6 +337,10 @@ function parseTimeTerm(term: string): [number, number] | null {
   ];
 }
 
+function isCompactDate(value: string | null | undefined): value is string {
+  return typeof value === 'string' && /^\d{8}$/.test(value);
+}
+
 function dayOfWeek(yyyymmdd: string): number {
   const y = parseInt(yyyymmdd.slice(0, 4), 10);
   const m = parseInt(yyyymmdd.slice(4, 6), 10);
@@ -347,14 +350,29 @@ function dayOfWeek(yyyymmdd: string): number {
 
 function coversDate(row: SpaceScheduleRow, date: string): boolean {
   if (row.GANGJWA_START_DATE === date) return true;
+
   const m = (row.INFO2 || '').match(
     /(\d{4})\/(\d{2})\/(\d{2})\s*~\s*(\d{4})\/(\d{2})\/(\d{2})/,
   );
-  if (!m) return false;
-  const rs = m[1]! + m[2]! + m[3]!;
-  const re = m[4]! + m[5]! + m[6]!;
-  if (date < rs || date > re) return false;
-  return dayOfWeek(row.GANGJWA_START_DATE || date) === dayOfWeek(date);
+  if (m) {
+    const rs = m[1]! + m[2]! + m[3]!;
+    const re = m[4]! + m[5]! + m[6]!;
+    if (date < rs || date > re) return false;
+    // 수업 행의 INFO2 기간은 "현재 표시 주간"에 해당하는 경우가 있어,
+    // GANGJWA_START_DATE 의 요일까지 다시 비교하면 실제로 보이는 수업이 누락된다.
+    // 기간 안에만 들어오면 현재 날짜 문맥의 충돌로 본다.
+    return true;
+  }
+
+  // 예약/대여는 INFO2 가 "(승인)" 같은 상태 문자열인 경우가 많다.
+  // 이때는 GANGJWA_START_DATE 가 요청일과 정확히 일치할 때 충돌로 본다.
+  if ((row.GUBUN === '예약' || row.GUBUN === '대여') && isCompactDate(row.GANGJWA_START_DATE)) {
+    return row.GANGJWA_START_DATE === date;
+  }
+
+  // 형식을 해석할 수 없더라도 현재 dsGrdSub 문맥에 실린 점유 행이면
+  // 보수적으로 충돌로 간주한다.
+  return true;
 }
 
 function computeConflicts(

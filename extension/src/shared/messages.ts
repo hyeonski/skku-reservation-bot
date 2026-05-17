@@ -3,7 +3,16 @@
  * Discriminated union — chrome.runtime.sendMessage / chrome.tabs.sendMessage 페이로드로 사용.
  */
 
-import type { ChatMessage, ParseResult, SpaceCandidate, AutomationStatus, FilledSlots } from './types';
+import type {
+  ChatMessage,
+  ParseResult,
+  SpaceCandidate,
+  AutomationStatus,
+  FilledSlots,
+  ReservationFormData,
+  ApplicationState,
+  ConversationSessionSummary,
+} from './types';
 
 // ---------- popup → background ----------
 
@@ -51,31 +60,27 @@ export interface PopupResumeAfterLogin {
   conversationId: string;
 }
 
-/**
- * Dev-only: 채팅/LLM 우회 + /spaces 서버 조회만 BG 가 대행.
- * popup 의 DevPanel 1단계 (슬롯 + 필터 입력 → 후보 리스트 조회).
- */
-export interface PopupDevListSpaces {
-  type: 'POPUP_DEV_LIST_SPACES';
-  headcount: number;
-  campusCode?: string;
-  buildingNo?: string;
-}
-
-/**
- * Dev-only: 채팅/LLM/서버 전부 우회하고 자동화만 직접 트리거.
- * slots·candidates·formData를 popup의 dev panel에서 수기 입력한 값으로 받음.
- */
-export interface PopupDevRunAutomation {
-  type: 'POPUP_DEV_RUN_AUTOMATION';
-  conversationId: string;
-  slots: FilledSlots;
-  candidates: SpaceCandidate[];
-  formData: ReservationFormData;
-}
-
 export interface PopupGetStatus {
   type: 'POPUP_GET_STATUS';
+  conversationId: string;
+}
+
+export interface PopupListConversations {
+  type: 'POPUP_LIST_CONVERSATIONS';
+}
+
+export interface PopupDeleteConversation {
+  type: 'POPUP_DELETE_CONVERSATION';
+  conversationId: string;
+}
+
+export interface PopupApplySuggestedMemory {
+  type: 'POPUP_APPLY_SUGGESTED_MEMORY';
+  conversationId: string;
+}
+
+export interface PopupDismissSuggestedMemory {
+  type: 'POPUP_DISMISS_SUGGESTED_MEMORY';
   conversationId: string;
 }
 
@@ -189,15 +194,16 @@ export interface ContentPreviewResult {
   error?: string;
 }
 
-// ---------- 폼 데이터 (사용자가 채팅·confirm 단계에서 제공) ----------
+export interface ApplicationStateResponse {
+  ok: boolean;
+  applicationState?: ApplicationState;
+  error?: string;
+}
 
-export interface ReservationFormData {
-  hangsaGbCode: string;      // 행사구분 코드 (예: "111")
-  organization: string;       // 주관단체
-  eventName: string;          // 행사명
-  headcount: number;
-  purpose: string;            // 사용목적
-  // 날짜·시간·공간은 SpaceCandidate + date/start/end로 넘어옴
+export interface ConversationListResponse {
+  ok: boolean;
+  conversations?: ConversationSessionSummary[];
+  error?: string;
 }
 
 // ---------- Union ----------
@@ -211,8 +217,10 @@ export type PopupToBackground =
   | PopupConfirmReservation
   | PopupCancel
   | PopupGetStatus
-  | PopupDevListSpaces
-  | PopupDevRunAutomation;
+  | PopupListConversations
+  | PopupDeleteConversation
+  | PopupApplySuggestedMemory
+  | PopupDismissSuggestedMemory;
 
 export type BackgroundToPopup =
   | BgChatResponse

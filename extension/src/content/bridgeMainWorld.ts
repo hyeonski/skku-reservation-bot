@@ -210,6 +210,15 @@ declare global {
     return matches[occurrence] ?? matches[0] ?? null;
   }
 
+  function rootControlForSuffix(suffix: string): HTMLInputElement | HTMLTextAreaElement | null {
+    const root = byPopupSuffix(suffix);
+    if (!root) return null;
+    const controls = Array.from(
+      root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+    ).filter(isVisible);
+    return controls[0] ?? null;
+  }
+
   function popupFilledTextColor(): string {
     const comboRoot = byPopupSuffix('cboCampusCd');
     const comboText =
@@ -350,17 +359,17 @@ declare global {
 
   function renderedValueForSuffix(suffix: string): string {
     const root = byPopupSuffix(suffix);
+    const rootControl = rootControlForSuffix(suffix);
+    if (rootControl) {
+      const value = controlValue(rootControl);
+      if (value) return value;
+    }
     const labeledControl = labeledControlForSuffix(suffix);
     if (labeledControl) {
       const value = controlValue(labeledControl);
       if (value) return value;
     }
     if (!root) return '';
-    const controls = Array.from(
-      root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
-    ).filter(isVisible);
-    const control = controls[0] ?? null;
-    if (control) return controlValue(control);
     const textNodes = Array.from(
       root.querySelectorAll<HTMLElement>('[id$=":text"], [id*=":text"]'),
     ).filter(isVisible);
@@ -373,6 +382,8 @@ declare global {
     suffix: string,
   ): Array<HTMLElement | HTMLInputElement | HTMLTextAreaElement> {
     const targets: Array<HTMLElement | HTMLInputElement | HTMLTextAreaElement> = [];
+    const rootControl = rootControlForSuffix(suffix);
+    if (rootControl) targets.push(rootControl);
     const labeledControl = labeledControlForSuffix(suffix);
     if (labeledControl) targets.push(labeledControl);
 
@@ -430,6 +441,26 @@ declare global {
       if (String(node.innerText || node.textContent || '').trim() === text) return node;
     }
     return null;
+  }
+
+  function clickNeutralPopupArea(): boolean {
+    const preferredTexts = ['신청사항', '인적사항', '※ 안내사항', '공간예약신청'];
+    for (const text of preferredTexts) {
+      const node = findVisibleTextInPopup(text);
+      if (node) {
+        clickVisibleThing(node);
+        return true;
+      }
+    }
+    const prefix = popupPrefix();
+    const panel = document.querySelector<HTMLElement>(
+      `div[id^="${prefix}"][id$=".divData"]:not([id$=":icontext"])`,
+    );
+    if (panel && isVisible(panel)) {
+      clickVisibleThing(panel);
+      return true;
+    }
+    return false;
   }
 
   function hasVisibleTextContaining(text: string): boolean {
@@ -1195,14 +1226,19 @@ declare global {
         'TextArea00',
       ] as const;
       for (const suffix of clearTextSuffixes) {
-        const labeledControl = labeledControlForSuffix(suffix);
-        if (labeledControl) {
-          clearControlValueLikeUser(labeledControl);
+        const directControl = rootControlForSuffix(suffix);
+        if (directControl) {
+          clearControlValueLikeUser(directControl);
         } else {
-          const root = byPopupSuffix(suffix);
-          const control = root?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
-          if (control && isVisible(control)) {
-            clearControlValueLikeUser(control);
+          const labeledControl = labeledControlForSuffix(suffix);
+          if (labeledControl) {
+            clearControlValueLikeUser(labeledControl);
+          } else {
+            const root = byPopupSuffix(suffix);
+            const control = root?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea');
+            if (control && isVisible(control)) {
+              clearControlValueLikeUser(control);
+            }
           }
         }
         const cmp = dm[suffix];
@@ -1234,18 +1270,23 @@ declare global {
      */
     setRenderedControlValue: (args: { suffix: string; value: string | number }): true => {
       const value = String(args.value);
-      const root = byPopupSuffix(args.suffix);
-      const labeledControl = labeledControlForSuffix(args.suffix);
-      if (labeledControl) {
-        setControlValueLikeUser(labeledControl, value);
+      const directControl = rootControlForSuffix(args.suffix);
+      if (directControl) {
+        setControlValueLikeUser(directControl, value);
       } else {
-        if (!root) throw new Error('component root not found: ' + args.suffix);
-        const controls = Array.from(
-          root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
-        ).filter(isVisible);
-        const control = controls[0] ?? null;
-        if (!control) throw new Error('visible control not found: ' + args.suffix);
-        setControlValueLikeUser(control, value);
+        const labeledControl = labeledControlForSuffix(args.suffix);
+        if (labeledControl) {
+          setControlValueLikeUser(labeledControl, value);
+        } else {
+          const root = byPopupSuffix(args.suffix);
+          if (!root) throw new Error('component root not found: ' + args.suffix);
+          const controls = Array.from(
+            root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+          ).filter(isVisible);
+          const control = controls[0] ?? null;
+          if (!control) throw new Error('visible control not found: ' + args.suffix);
+          setControlValueLikeUser(control, value);
+        }
       }
       syncRenderedValueForSuffix(args.suffix, value);
       return true;
@@ -1385,6 +1426,24 @@ declare global {
         return true;
       }
       throw new Error('visible save button not found');
+    },
+
+    /** 텍스트 필드 편집을 종료시켜 Nexacro 검증 대상 값으로 커밋하도록 유도. */
+    commitPopupEdits: async (): Promise<true> => {
+      const active = document.activeElement;
+      if (
+        active &&
+        (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) &&
+        isInActivePopup(active)
+      ) {
+        active.dispatchEvent(new Event('change', { bubbles: true }));
+        active.blur();
+        active.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+        active.dispatchEvent(new FocusEvent('blur', { bubbles: true }));
+      }
+      clickNeutralPopupArea();
+      await wait(150);
+      return true;
     },
 
     /** btnSave_OnClick 호출 — 실제 클릭 실패 시 fallback. */

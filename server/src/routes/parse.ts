@@ -15,6 +15,12 @@ import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { ParseRequest, ParseResponse } from '../schemas/parse.js';
 import { parseWithLLM } from '../llm/client.js';
+import {
+  buildApplicationState,
+  parseStoredApplicationState,
+  parseStoredReservationForm,
+  summarizeReservationLabel,
+} from '../application/state.js';
 
 const ErrorResponse = z.object({
   error: z.string(),
@@ -30,6 +36,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         response: {
           200: ParseResponse,
           403: ErrorResponse,
+          404: ErrorResponse,
           502: ErrorResponse,
         },
       },
@@ -41,8 +48,18 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       // 1) Ownership check (대화가 이미 존재하면 clientId 일치 확인).
       const existing = await app.prisma.conversation.findUnique({
         where: { id: body.conversation_id },
-        select: { clientId: true, status: true },
+        select: {
+          clientId: true,
+          status: true,
+          deletedAt: true,
+          lastApplicationState: true,
+        },
       });
+
+      if (existing?.deletedAt) {
+        reply.code(404).send({ error: 'conversation not found' });
+        return;
+      }
 
       if (existing && existing.clientId !== clientId) {
         reply.code(403).send({ error: 'conversation does not belong to client' });
@@ -62,16 +79,61 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         return;
       }
 
+      const latestUserMessage =
+        [...body.history].reverse().find((message) => message.role === 'user')?.content ?? '';
+
+      const memories = await app.prisma.conversation.findMany({
+        where: {
+          clientId,
+          status: 'completed',
+          deletedAt: null,
+          id: { not: body.conversation_id },
+        },
+        select: {
+          id: true,
+          confirmedReservationForm: true,
+          confirmedReservationLabel: true,
+        },
+        orderBy: { updatedAt: 'desc' },
+        take: 10,
+      });
+
+      const memoryCandidates = memories
+        .map((row) => {
+          const formData = parseStoredReservationForm(row.confirmedReservationForm);
+          if (!formData) return null;
+          return {
+            conversationId: row.id,
+            label: row.confirmedReservationLabel ?? summarizeReservationLabel(formData),
+            formData,
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== null);
+
+      const applicationResult = buildApplicationState({
+        history: body.history,
+        latestUserMessage,
+        baseIntent: llmResult.intent,
+        baseAssistantMessage: llmResult.assistant_message,
+        filledSlots: llmResult.filled_slots,
+        readyToSearch: llmResult.ready_to_search,
+        previousState: parseStoredApplicationState(existing?.lastApplicationState ?? null),
+        memories: memoryCandidates,
+      });
+
       const response: ParseResponse = {
         conversation_id: body.conversation_id,
         ...llmResult,
+        intent: applicationResult.intent,
+        assistant_message: applicationResult.assistantMessage,
+        application_state: applicationResult.applicationState,
       };
 
       // 3) Conversation mirror upsert (D-018).
       //   - status: 기본 active. intent=cancel 이면 abandoned_user.
       //   - completed 마킹은 실제 예약 제출 시 별도 라우트에서. 여기선 active/abandoned_user 만 다룬다.
       const nextStatus =
-        llmResult.intent === 'cancel' ? 'abandoned_user' : 'active';
+        applicationResult.intent === 'cancel' ? 'abandoned_user' : 'active';
 
       try {
         await app.prisma.conversation.upsert({
@@ -81,13 +143,15 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
             clientId,
             status: nextStatus,
             history: body.history,
-            lastIntent: llmResult.intent,
+            lastIntent: applicationResult.intent,
             lastFilledSlots: llmResult.filled_slots,
+            lastApplicationState: applicationResult.applicationState,
           },
           update: {
             history: body.history,
-            lastIntent: llmResult.intent,
+            lastIntent: applicationResult.intent,
             lastFilledSlots: llmResult.filled_slots,
+            lastApplicationState: applicationResult.applicationState,
             status: nextStatus,
           },
         });
