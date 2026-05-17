@@ -4,6 +4,14 @@
  */
 
 export type ChatRole = 'user' | 'assistant';
+export type ApplicationField = 'organization' | 'eventName' | 'purpose' | 'hangsaGbCode';
+export type ApplicationConfidenceLevel = 'high' | 'medium' | 'low';
+export type ApplicationDraftSource = 'conversation' | 'memory' | 'user_modified';
+export type ConversationStatus =
+  | 'active'
+  | 'completed'
+  | 'abandoned_user'
+  | 'abandoned_timeout';
 
 export interface ChatMessage {
   role: ChatRole;
@@ -16,6 +24,7 @@ export interface FilledSlots {
   end_time: string | null;    // "HH:MM"
   duration_min: number | null;
   headcount: number | null;
+  campus: string | null;
   building: string | null;
   space: string | null;
 }
@@ -24,8 +33,32 @@ export type Intent =
   | 'new_reservation'
   | 'request_alternative'
   | 'modify_slot'
+  | 'modify_application'
   | 'cancel'
   | 'out_of_scope';
+
+export interface ReservationFormData {
+  hangsaGbCode: string;
+  organization: string;
+  eventName: string;
+  headcount: number;
+  purpose: string;
+}
+
+export interface SuggestedApplicationMemory {
+  conversationId: string;
+  label: string;
+  formData: ReservationFormData;
+}
+
+export interface ApplicationState {
+  draft: ReservationFormData | null;
+  missing_application: ApplicationField[];
+  needs_application_collection: boolean;
+  suggested_memory: SuggestedApplicationMemory | null;
+  confidence: Record<ApplicationField, ApplicationConfidenceLevel>;
+  source: ApplicationDraftSource | null;
+}
 
 export interface ParseResult {
   conversation_id: string;
@@ -34,6 +67,15 @@ export interface ParseResult {
   intent: Intent;
   ready_to_search: boolean;
   assistant_message: string;
+  application_state: ApplicationState;
+}
+
+export interface ConversationSessionSummary {
+  id: string;
+  title: string;
+  status: ConversationStatus;
+  updatedAt: string;
+  lastMessagePreview: string;
 }
 
 /** 자동화 탐색 로그 — 후보 1개 시도 결과 */

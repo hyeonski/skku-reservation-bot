@@ -18,7 +18,8 @@ export const SYSTEM_PROMPT = `당신은 성균관대 GLS 공간예약 시스템�
 - start_time: 시작 시각 ("HH:MM", 24h)
 - end_time ("HH:MM", 24h) 또는 duration_min (정수, 분 단위) — 둘 중 하나로 종료 시각을 표현
 
-### 선택 필터 슬롯 (2개)
+### 선택 필터 슬롯 (3개)
+- campus: 캠퍼스명 또는 별칭 (예: "자연과학캠퍼스", "인문사회과학캠퍼스", "율전", "명륜", "자과캠", "인사캠")
 - building: 건물명 (예: "학생회관", "반도체관")
 - space: 호실/공간명 (예: "첨단강의실")
 
@@ -26,6 +27,7 @@ export const SYSTEM_PROMPT = `당신은 성균관대 GLS 공간예약 시스템�
 - new_reservation: 새 예약 요청 (기본)
 - request_alternative: "다른 곳 보여줘" — 기존 슬롯 유지하고 재탐색
 - modify_slot: "아니 30명으로" — 기존 슬롯 일부 수정
+- modify_application: 신청서 정보 수정 ("행사명은 운영위원회 회의로")
 - cancel: "그만할래" 등 명시적 중단
 - out_of_scope: 잡담·무관한 발화
 
@@ -40,11 +42,12 @@ export const SYSTEM_PROMPT = `당신은 성균관대 GLS 공간예약 시스템�
     "end_time": "HH:MM" 또는 null,
     "duration_min": 정수 또는 null,
     "headcount": 정수 또는 null,
+    "campus": 문자열 또는 null,
     "building": 문자열 또는 null,
     "space": 문자열 또는 null
   },
   "missing_required": [아직 채워지지 않은 필수 슬롯 이름 배열],
-  "intent": "new_reservation" | "request_alternative" | "modify_slot" | "cancel" | "out_of_scope",
+  "intent": "new_reservation" | "request_alternative" | "modify_slot" | "modify_application" | "cancel" | "out_of_scope",
   "ready_to_search": boolean,
   "assistant_message": "사용자에게 보낼 한국어 메시지"
 }
@@ -87,6 +90,7 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
         end_time: null,
         duration_min: 120,
         headcount: 20,
+        campus: null,
         building: null,
         space: null,
       },
@@ -94,6 +98,26 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
       intent: 'new_reservation',
       ready_to_search: true,
       assistant_message: '5/19(화) 18:00부터 2시간, 20명으로 가능한 공간을 찾아볼게요.',
+    },
+  },
+  {
+    now: '2026-05-12T14:30:00+09:00',
+    user: '다음 주 목요일 오후 2시부터 2시간, 6명 율전에서 회의실 잡아줘',
+    assistant: {
+      filled_slots: {
+        date: '2026-05-21',
+        start_time: '14:00',
+        end_time: null,
+        duration_min: 120,
+        headcount: 6,
+        campus: '율전',
+        building: null,
+        space: null,
+      },
+      missing_required: [],
+      intent: 'new_reservation',
+      ready_to_search: true,
+      assistant_message: '5/21(목) 14:00부터 2시간, 6명, 율전으로 가능한 공간을 찾아볼게요.',
     },
   },
   {
@@ -106,6 +130,7 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
         end_time: null,
         duration_min: null,
         headcount: null,
+        campus: null,
         building: null,
         space: null,
       },
@@ -132,6 +157,7 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
         end_time: null,
         duration_min: 180,
         headcount: 15,
+        campus: null,
         building: null,
         space: null,
       },
@@ -155,6 +181,7 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
         end_time: null,
         duration_min: 120,
         headcount: 10,
+        campus: null,
         building: null,
         space: null,
       },
@@ -174,6 +201,7 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
         end_time: null,
         duration_min: null,
         headcount: null,
+        campus: null,
         building: null,
         space: null,
       },
@@ -182,6 +210,30 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
       ready_to_search: false,
       assistant_message:
         '저는 GLS 공간예약을 도와드리는 도우미예요. 예약하실 일정과 인원을 알려주시면 찾아드릴게요!',
+    },
+  },
+  {
+    now: '2026-05-12T14:30:00+09:00',
+    priorHistory: [
+      { role: 'user', content: '내일 18시부터 2시간, 8명 회의실 잡아줘' },
+      { role: 'assistant', content: '5/13(수) 18:00부터 2시간, 8명으로 가능한 공간을 찾아볼게요.' },
+    ],
+    user: '행사명은 운영위원회 회의로 바꿔줘',
+    assistant: {
+      filled_slots: {
+        date: '2026-05-13',
+        start_time: '18:00',
+        end_time: null,
+        duration_min: 120,
+        headcount: 8,
+        campus: null,
+        building: null,
+        space: null,
+      },
+      missing_required: [],
+      intent: 'modify_application',
+      ready_to_search: true,
+      assistant_message: '신청 정보를 업데이트할게요.',
     },
   },
 ];

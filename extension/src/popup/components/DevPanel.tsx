@@ -12,8 +12,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { FilledSlots, SpaceCandidate } from '../../shared/types';
-import type { ReservationFormData } from '../../shared/messages';
+import type { FilledSlots, ReservationFormData, SpaceCandidate } from '../../shared/types';
 
 function nextWeekThursday(): string {
   const now = new Date();
@@ -148,6 +147,7 @@ export function DevPanel({ busy, initialState, onStateChange, onListSpaces, onRu
         end_time: slots.endTime,
         duration_min: null,
         headcount: Number(slots.headcount),
+        campus: null,
         building: candidate.buildingName,
         space: candidate.roomName,
       };

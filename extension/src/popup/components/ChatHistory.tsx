@@ -3,23 +3,18 @@
  * - 스크롤 최하단 자동 유지
  */
 
-import { useEffect, useRef, type ReactNode } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ChatMessage as ChatMessageType } from '../../shared/types';
 import { ChatMessage } from './ChatMessage';
 
-interface Props {
-  messages: ChatMessageType[];
-  footer?: ReactNode;
-}
-
-export function ChatHistory({ messages, footer }: Props) {
+export function ChatHistory({ messages }: { messages: ChatMessageType[] }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages, footer]);
+  }, [messages]);
 
   return (
     <div className="chat-history" ref={containerRef}>
@@ -31,7 +26,6 @@ export function ChatHistory({ messages, footer }: Props) {
       {messages.map((m, i) => (
         <ChatMessage key={i} message={m} />
       ))}
-      {footer}
     </div>
   );
 }

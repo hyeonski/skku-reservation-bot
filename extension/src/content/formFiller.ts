@@ -10,8 +10,7 @@
  */
 
 import { MODAL_FIELDS } from '@gls/nexacroPaths';
-import type { ReservationFormData } from '../shared/messages';
-import type { SpaceCandidate } from '../shared/types';
+import type { ReservationFormData, SpaceCandidate } from '../shared/types';
 import { runInPage } from './contentScript';
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -90,6 +89,20 @@ async function setTimeComboInteractionFirst(
     await runInPage('setComboAndFireChange', { suffix, value: hhmm });
   }
   await runInPage('waitForRenderedValue', { suffix, value: label, timeoutMs: 5000 });
+}
+
+async function setTextFieldWithCommit(
+  suffix: string,
+  value: string,
+): Promise<void> {
+  await runInPage('setComponentValueAndFireChange', {
+    suffix,
+    value,
+  });
+  await runInPage('setRenderedControlValue', {
+    suffix,
+    value,
+  });
 }
 
 export async function fillForm(args: FillArgs): Promise<void> {
@@ -188,23 +201,12 @@ export async function fillForm(args: FillArgs): Promise<void> {
     formData.hangsaGbCode,
   );
 
-  // 텍스트류는 보이는 input/textarea 우선.
-  await runInPage('setRenderedControlValue', {
-    suffix: MODAL_FIELDS.주관단체,
-    value: formData.organization,
-  });
-  await runInPage('setRenderedControlValue', {
-    suffix: MODAL_FIELDS.행사명,
-    value: formData.eventName,
-  });
-  await runInPage('setRenderedControlValue', {
-    suffix: MODAL_FIELDS.행사인원,
-    value: String(formData.headcount),
-  });
-  await runInPage('setRenderedControlValue', {
-    suffix: MODAL_FIELDS.사용목적,
-    value: formData.purpose,
-  });
+  // 텍스트류는 내부값을 먼저 맞춘 뒤, 실제 사용자 입력+blur가 마지막으로 오게 한다.
+  await setTextFieldWithCommit(MODAL_FIELDS.주관단체, formData.organization);
+  await setTextFieldWithCommit(MODAL_FIELDS.행사명, formData.eventName);
+  await setTextFieldWithCommit(MODAL_FIELDS.행사인원, String(formData.headcount));
+  await setTextFieldWithCommit(MODAL_FIELDS.사용목적, formData.purpose);
+  await runInPage('commitPopupEdits');
 
   // Nexacro 내부 후속 처리(cascade / repaint)가 늦게 따라오는 케이스를 기다린다.
   await wait(700);
