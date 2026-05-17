@@ -420,7 +420,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
-  // fetch candidates (또는 dev 주입 사용)
+  // fetch candidates (사전 주입 후보가 있으면 우선 사용)
   let candidates: SpaceCandidate[];
   let preserveCandidateOrder = false;
   if (args.candidates && args.candidates.length > 0) {

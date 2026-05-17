@@ -62,16 +62,6 @@ export interface UseConversationResult {
   applySuggestedMemory: () => Promise<void>;
   dismissSuggestedMemory: () => Promise<void>;
   promptApplicationEdit: () => void;
-  listDevSpaces: (args: {
-    headcount: number;
-    campusCode?: string;
-    buildingNo?: string;
-  }) => Promise<SpaceCandidate[]>;
-  runDevAutomation: (args: {
-    slots: FilledSlots;
-    candidates: SpaceCandidate[];
-    formData: ReservationFormData;
-  }) => Promise<void>;
 }
 
 /** chrome.runtime.sendMessage 의 Promise 래퍼 */
@@ -722,55 +712,6 @@ export function useConversation(): UseConversationResult {
     appendAssistant('어떤 항목을 바꿀까요? "행사명은 ..."처럼 말씀해 주세요.');
   }, [appendAssistant]);
 
-  const listDevSpaces = useCallback(
-    async (args: {
-      headcount: number;
-      campusCode?: string;
-      buildingNo?: string;
-    }): Promise<SpaceCandidate[]> => {
-      const resp = (await sendToBackground({
-        type: 'POPUP_DEV_LIST_SPACES',
-        headcount: args.headcount,
-        ...(args.campusCode ? { campusCode: args.campusCode } : {}),
-        ...(args.buildingNo ? { buildingNo: args.buildingNo } : {}),
-      })) as { ok: boolean; candidates?: SpaceCandidate[]; error?: string } | undefined;
-      if (!resp) return [];
-      if (!resp.ok) throw new Error(resp.error ?? 'listSpaces failed');
-      return resp.candidates ?? [];
-    },
-    [],
-  );
-
-  const runDevAutomation = useCallback(
-    async (args: {
-      slots: FilledSlots;
-      candidates: SpaceCandidate[];
-      formData: ReservationFormData;
-    }) => {
-      if (busy) return;
-      setBusy(true);
-      setLastFilledSlots(args.slots);
-      setDraftFormData(args.formData);
-      appendAssistant(
-        `[dev] 자동화 시작 — ${args.candidates.length}개 후보, ${args.slots.date} ${args.slots.start_time}-${args.slots.end_time}`,
-      );
-      try {
-        await sendToBackground({
-          type: 'POPUP_DEV_RUN_AUTOMATION',
-          conversationId,
-          slots: args.slots,
-          candidates: args.candidates,
-          formData: args.formData,
-        });
-      } catch (e) {
-        appendAssistant(`[dev] 트리거 실패: ${(e as Error).message}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [appendAssistant, busy, conversationId],
-  );
-
   const lastNoCandidateRef = useRef(false);
   useEffect(() => {
     if (status.kind === 'no_candidate' && !lastNoCandidateRef.current) {
@@ -803,7 +744,5 @@ export function useConversation(): UseConversationResult {
     applySuggestedMemory,
     dismissSuggestedMemory,
     promptApplicationEdit,
-    listDevSpaces,
-    runDevAutomation,
   };
 }

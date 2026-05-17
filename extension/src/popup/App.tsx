@@ -11,17 +11,12 @@
  * useConversation 훅이 background SW와의 메시지 송수신을 담당.
  */
 
-import { useEffect, useState } from 'react';
 import { useConversation } from './hooks/useConversation';
 import { ChatHistory } from './components/ChatHistory';
 import { ChatInput } from './components/ChatInput';
 import { ConversationPicker } from './components/ConversationPicker';
-import { DevPanel, type DevPanelState } from './components/DevPanel';
 import { ReservationReviewPanel } from './components/ReservationReviewPanel';
 import type { AutomationStatus, SearchLogEntry } from '../shared/types';
-
-const POPUP_MODE_KEY = 'gls_popup_mode_v1';
-const DEV_PANEL_SNAPSHOT_PREFIX = 'gls_dev_panel_snapshot_v1_';
 
 function statusLabel(status: AutomationStatus): string | null {
   switch (status.kind) {
@@ -86,55 +81,7 @@ export function App() {
     applySuggestedMemory,
     dismissSuggestedMemory,
     promptApplicationEdit,
-    listDevSpaces,
-    runDevAutomation,
   } = useConversation();
-  const [mode, setMode] = useState<'chat' | 'dev'>('chat');
-  const [devPanelState, setDevPanelState] = useState<DevPanelState | null>(null);
-
-  useEffect(() => {
-    void (async () => {
-      try {
-        const got = await chrome.storage?.local?.get(POPUP_MODE_KEY);
-        const savedMode = got?.[POPUP_MODE_KEY];
-        if (savedMode === 'chat' || savedMode === 'dev') {
-          setMode(savedMode);
-        }
-      } catch {
-        /* non-fatal */
-      }
-    })();
-  }, []);
-
-  useEffect(() => {
-    if (!conversationId) return;
-    void (async () => {
-      try {
-        const got = await chrome.storage?.local?.get(`${DEV_PANEL_SNAPSHOT_PREFIX}${conversationId}`);
-        const saved = got?.[`${DEV_PANEL_SNAPSHOT_PREFIX}${conversationId}`] as DevPanelState | undefined;
-        if (saved) setDevPanelState(saved);
-      } catch {
-        /* non-fatal */
-      }
-    })();
-  }, [conversationId]);
-
-  useEffect(() => {
-    if (!conversationId || !devPanelState) return;
-    const localStorageApi = chrome.storage?.local;
-    if (!localStorageApi) return;
-    void localStorageApi
-      .set({ [`${DEV_PANEL_SNAPSHOT_PREFIX}${conversationId}`]: devPanelState })
-      .catch(() => {});
-  }, [conversationId, devPanelState]);
-
-  function updateMode(nextMode: 'chat' | 'dev') {
-    setMode(nextMode);
-    const localStorageApi = chrome.storage?.local;
-    if (!localStorageApi) return;
-    void localStorageApi.set({ [POPUP_MODE_KEY]: nextMode }).catch(() => {});
-  }
-
   const label = statusLabel(status);
   const active = isActive(status);
   const searchLog = getSearchLog(status);
@@ -157,31 +104,12 @@ export function App() {
         <ConversationPicker
           currentConversationId={conversationId}
           conversations={conversationSummaries}
-          onCreateConversation={async () => {
-            setDevPanelState(null);
-            await createConversation();
-          }}
+          onCreateConversation={createConversation}
           onSelectConversation={async (nextConversationId) => {
-            if (nextConversationId !== conversationId) {
-              setDevPanelState(null);
-            }
             await switchConversation(nextConversationId);
           }}
-          onDeleteConversation={async (targetConversationId) => {
-            if (targetConversationId === conversationId) {
-              setDevPanelState(null);
-            }
-            await deleteConversation(targetConversationId);
-          }}
+          onDeleteConversation={deleteConversation}
         />
-        <button
-          type="button"
-          className={`app__mode-toggle ${mode === 'dev' ? 'app__mode-toggle--active' : ''}`}
-          onClick={() => updateMode(mode === 'chat' ? 'dev' : 'chat')}
-          title="자동화만 테스트 (LLM·서버 우회)"
-        >
-          {mode === 'dev' ? '💬 chat' : '🛠 dev'}
-        </button>
       </header>
 
       <main className="app__main">
@@ -189,7 +117,7 @@ export function App() {
           <div className="chat-history">
             <div className="chat-history__empty">이전 대화와 예약 상태를 불러오는 중…</div>
           </div>
-        ) : mode === 'chat' ? (
+        ) : (
           <>
             <ChatHistory messages={messages} />
             <ReservationReviewPanel
@@ -209,34 +137,6 @@ export function App() {
               onRejectCandidate={() => void confirmReservation(false)}
             />
           </>
-        ) : (
-          <>
-            <DevPanel
-              busy={busy}
-              initialState={devPanelState}
-              onStateChange={setDevPanelState}
-              onListSpaces={listDevSpaces}
-              onRun={runDevAutomation}
-            />
-            <div className="dev-panel__footer">
-              <ReservationReviewPanel
-                status={status}
-                candidate={candidate}
-                searchLog={searchLog}
-                lastFilledSlots={lastFilledSlots}
-                applicationState={applicationState}
-                draftFormData={draftFormData}
-                candidateCardKey={candidateCardKey}
-                onConfirmNavigation={(confirmed) => void confirmNavigation(confirmed)}
-                onResumeAfterLogin={() => void resumeAfterLogin()}
-                onApplySuggestedMemory={() => void applySuggestedMemory()}
-                onDismissSuggestedMemory={() => void dismissSuggestedMemory()}
-                onRequestApplicationEdit={promptApplicationEdit}
-                onConfirmReservation={() => void confirmReservation(true, draftFormData ?? undefined)}
-                onRejectCandidate={() => void confirmReservation(false)}
-              />
-            </div>
-          </>
         )}
       </main>
 
@@ -244,7 +144,7 @@ export function App() {
         <div className={`status-bar status-bar--${status.kind}`}>{label}</div>
       )}
 
-      {mode === 'chat' && !restoring && (
+      {!restoring && (
         <ChatInput onSubmit={(t) => void sendMessage(t)} disabled={busy} />
       )}
     </div>

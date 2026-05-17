@@ -60,29 +60,6 @@ export interface PopupResumeAfterLogin {
   conversationId: string;
 }
 
-/**
- * Dev-only: 채팅/LLM 우회 + /spaces 서버 조회만 BG 가 대행.
- * popup 의 DevPanel 1단계 (슬롯 + 필터 입력 → 후보 리스트 조회).
- */
-export interface PopupDevListSpaces {
-  type: 'POPUP_DEV_LIST_SPACES';
-  headcount: number;
-  campusCode?: string;
-  buildingNo?: string;
-}
-
-/**
- * Dev-only: 채팅/LLM/서버 전부 우회하고 자동화만 직접 트리거.
- * slots·candidates·formData를 popup의 dev panel에서 수기 입력한 값으로 받음.
- */
-export interface PopupDevRunAutomation {
-  type: 'POPUP_DEV_RUN_AUTOMATION';
-  conversationId: string;
-  slots: FilledSlots;
-  candidates: SpaceCandidate[];
-  formData: ReservationFormData;
-}
-
 export interface PopupGetStatus {
   type: 'POPUP_GET_STATUS';
   conversationId: string;
@@ -243,9 +220,7 @@ export type PopupToBackground =
   | PopupListConversations
   | PopupDeleteConversation
   | PopupApplySuggestedMemory
-  | PopupDismissSuggestedMemory
-  | PopupDevListSpaces
-  | PopupDevRunAutomation;
+  | PopupDismissSuggestedMemory;
 
 export type BackgroundToPopup =
   | BgChatResponse

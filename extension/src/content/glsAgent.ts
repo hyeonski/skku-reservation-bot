@@ -304,7 +304,7 @@ export async function checkAvailability(
   const conflicts = computeConflicts(schedule, yyyymmdd, startHour, endHour);
   console.log('[GLS-iso] checkAvailability done — conflicts:', conflicts.length);
 
-  // Preview: formData 가 미리 제공된 경우 (dev panel / 행사메타 collector) 폼 전체를
+  // Preview: formData 가 미리 제공된 경우 폼 전체를
   // 채워서 사용자가 GLS 탭에서 시각적으로 검증할 수 있게 한다. 저장은 별도 단계.
   if (options?.formData && conflicts.length === 0) {
     console.log('[GLS-iso] step: fillForm preview');

@@ -541,23 +541,6 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
 
-    case 'POPUP_DEV_LIST_SPACES':
-      apiClient
-        .listSpaces({
-          headcount: msg.headcount,
-          ...(msg.campusCode ? { campusCode: msg.campusCode } : {}),
-          ...(msg.buildingNo ? { buildingNo: msg.buildingNo } : {}),
-        })
-        .then((candidates) => sendResponse({ ok: true, candidates }))
-        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
-      return true;
-
-    case 'POPUP_DEV_RUN_AUTOMATION':
-      handleDevRunAutomation(msg)
-        .then(() => sendResponse({ ok: true }))
-        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
-      return true;
-
     default:
       return false;
   }
@@ -953,60 +936,6 @@ async function handleDismissSuggestedMemory(
     .catch((e) => console.warn('[SW] dismissSuggestedMemory mirror failed:', e));
 
   return { ok: true, applicationState: ctx.applicationState };
-}
-
-async function handleDevRunAutomation(
-  msg: Extract<PopupToBackground, { type: 'POPUP_DEV_RUN_AUTOMATION' }>,
-): Promise<void> {
-  // Dev 진입점 — 채팅·LLM·서버 전부 우회.
-  // 슬롯·후보·formData 를 popup의 DevPanel에서 그대로 받아 runReservationFlow 에 주입.
-  const emit = makeStatusEmitter(msg.conversationId);
-  // SW context도 만들어두면 popup 재오픈 시 status 복원 가능
-  const ctx = getOrCreateContext(msg.conversationId);
-  ctx.lastFilledSlots = msg.slots;
-  ctx.conversationStatus = 'active';
-  ctx.confirmedReservationLabel = null;
-  ctx.updatedAt = new Date().toISOString();
-  ctx.applicationState = {
-    draft: msg.formData,
-    missing_application: [],
-    needs_application_collection: false,
-    suggested_memory: null,
-    confidence: {
-      organization: 'high',
-      eventName: 'high',
-      purpose: 'high',
-      hangsaGbCode: 'high',
-    },
-    source: 'conversation',
-  };
-  const pending = {
-    conversationId: msg.conversationId,
-    slots: msg.slots,
-    candidates: msg.candidates,
-    pendingFormData: msg.formData,
-  };
-  ctx.pendingStart = pending;
-  void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
-
-  pendingStarts.set(msg.conversationId, pending);
-  if (await shouldSkipNavigationPrompt()) {
-    void gls
-      .runReservationFlow({
-        conversationId: msg.conversationId,
-        slots: msg.slots,
-        candidates: msg.candidates,
-        pendingFormData: msg.formData,
-        forceNewTab: false,
-        onStatusChange: emit,
-      })
-      .catch((e) => {
-        emit({ kind: 'error', message: (e as Error).message });
-      });
-    return;
-  }
-  emit({ kind: 'navigation_required' });
 }
 
 async function handleCancel(
