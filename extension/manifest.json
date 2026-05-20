@@ -28,6 +28,6 @@
   "host_permissions": [
     "https://kingoinfo.skku.edu/*",
     "https://login.skku.edu/*",
-    "http://localhost:3000/*"
+    "http://localhost:8000/*"
   ]
 }

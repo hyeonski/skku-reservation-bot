@@ -10,7 +10,7 @@ const envSchema = z.object({
   PORT: z
     .string()
     .optional()
-    .transform((v) => (v ? Number(v) : 3000))
+    .transform((v) => (v ? Number(v) : 8000))
     .pipe(z.number().int().positive()),
   LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required'),
   LLM_BASE_URL: z.string().url().optional().default('https://api.deepseek.com'),

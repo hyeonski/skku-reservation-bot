@@ -72,7 +72,7 @@ pnpm install -C server
 `server/.env.example` 복사 → `server/.env`:
 
 ```
-PORT=3000
+PORT=8000
 LLM_API_KEY=sk-...
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-chat
@@ -110,7 +110,7 @@ cd server
 pnpm dev
 ```
 
-`http://localhost:3000/health` → `{ ok: true }` 확인.
+`http://localhost:8000/health` → `{ ok: true }` 확인.
 
 ### 6. 확장 빌드 + 로드
 
