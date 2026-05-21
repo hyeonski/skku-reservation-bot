@@ -4,8 +4,10 @@
   "version": "0.1.0",
   "description": "자연어로 GLS 공간예약을 자동화합니다.",
   "action": {
-    "default_popup": "src/popup/index.html",
     "default_title": "SKKU 공간예약"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
   },
   "background": {
     "service_worker": "src/background/serviceWorker.ts",
@@ -24,7 +26,7 @@
       "run_at": "document_idle"
     }
   ],
-  "permissions": ["storage", "tabs", "scripting", "notifications"],
+  "permissions": ["storage", "tabs", "scripting", "notifications", "sidePanel"],
   "host_permissions": [
     "https://kingoinfo.skku.edu/*",
     "https://login.skku.edu/*",

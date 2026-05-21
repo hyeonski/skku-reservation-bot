@@ -92,7 +92,11 @@ export type AutomationStatus =
   | { kind: 'idle' }
   | { kind: 'navigation_required' }
   | { kind: 'opening_gls' }
-  | { kind: 'login_required' }
+  | {
+      kind: 'login_required';
+      reason: 'needed' | 'expired';
+      resumeIdx?: number;
+    }
   | { kind: 'searching'; tried: number; total: number; log: SearchLogEntry[] }
   | {
       kind: 'candidate_found';
