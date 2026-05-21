@@ -7,11 +7,18 @@ interface RecommendationCardProps {
   onAlternative?: () => void;
 }
 
+function formatLimitTime(limitTimeHHMM?: string | null): string | null {
+  if (!limitTimeHHMM || limitTimeHHMM.length !== 4) return null;
+  return `${limitTimeHHMM.slice(0, 2)}:${limitTimeHHMM.slice(2, 4)}`;
+}
+
 export function RecommendationCard({
   space,
   slots,
   onAlternative,
 }: RecommendationCardProps) {
+  const limitTime = formatLimitTime(space.limitTimeHHMM);
+
   return (
     <div className="card">
       <div className="card-head">
@@ -26,7 +33,7 @@ export function RecommendationCard({
           <div className="info">
             <div className="name">{space.name}</div>
             <div className="building">
-              {space.building} · {space.floor}
+              {space.building} · {space.code}
             </div>
             <div className="rec-meta">
               <div className="pair">
@@ -43,7 +50,14 @@ export function RecommendationCard({
                 <span>날짜</span>
                 <span className="v">{slots.date}</span>
               </div>
+              {limitTime && (
+                <div className="pair">
+                  <span>운영시간</span>
+                  <span className="v">~{limitTime}</span>
+                </div>
+              )}
             </div>
+            {space.contents && <div className="rec-note">{space.contents}</div>}
           </div>
         </div>
         {space.useJojikName && (

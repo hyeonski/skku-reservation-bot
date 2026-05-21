@@ -54,6 +54,7 @@ interface PendingStartRequest {
 
 interface ConversationContext {
   conversationId: string;
+  title: string | null;
   history: ChatMessage[];
   lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
@@ -107,6 +108,7 @@ function getOrCreateContext(conversationId: string): ConversationContext {
   if (!ctx) {
     ctx = {
       conversationId,
+      title: null,
       history: [],
       lastIntent: null,
       lastFilledSlots: null,
@@ -122,6 +124,7 @@ function getOrCreateContext(conversationId: string): ConversationContext {
     contexts.set(conversationId, ctx);
   } else {
     ctx.conversationStatus ??= 'active';
+    ctx.title ??= null;
     ctx.confirmedReservationLabel ??= null;
     ctx.updatedAt ??= new Date().toISOString();
     ctx.loginPrompt ??= null;
@@ -254,6 +257,7 @@ async function removeConversationIndexEntry(conversationId: string): Promise<Con
 function buildSummaryFromContext(ctx: ConversationContext): ConversationSessionSummary {
   return makeConversationSessionSummary({
     id: ctx.conversationId,
+    title: ctx.title,
     status: ctx.conversationStatus,
     updatedAt: ctx.updatedAt,
     confirmedReservationLabel: ctx.confirmedReservationLabel,
@@ -280,6 +284,7 @@ function buildSummaryFromServer(
   }
   return makeConversationSessionSummary({
     id: row.id,
+    title: row.title,
     status: row.status,
     updatedAt: row.updatedAt,
     confirmedReservationLabel: row.confirmedReservationLabel,
@@ -352,6 +357,7 @@ async function hydrateContextFromServer(
     const dto = await apiClient.getConversation(conversationId);
     const ctx = getOrCreateContext(conversationId);
     ctx.history = dto.history;
+    ctx.title = dto.title;
     ctx.lastIntent = dto.lastIntent;
     ctx.lastFilledSlots = dto.lastFilledSlots;
     ctx.applicationState = dto.lastApplicationState;
@@ -370,6 +376,26 @@ async function hydrateContextFromServer(
       return null;
     }
     throw error;
+  }
+}
+
+async function mirrorConversation(
+  conversationId: string,
+  body: apiClient.UpsertConversationBody,
+  warnLabel: string,
+): Promise<void> {
+  try {
+    const dto = await apiClient.upsertConversation(conversationId, body);
+    const ctx = contexts.get(conversationId);
+    if (!ctx) return;
+    ctx.title = dto.title;
+    ctx.conversationStatus = dto.status;
+    ctx.confirmedReservationLabel = dto.confirmedReservationLabel;
+    ctx.updatedAt = dto.updatedAt;
+    await persistContexts();
+    await syncConversationSummaryFromContext(ctx);
+  } catch (e) {
+    console.warn(warnLabel, e);
   }
 }
 
@@ -810,16 +836,12 @@ async function handleChatRequest(
   void syncConversationSummaryFromContext(ctx);
 
   // Mirror to server (D-018). Fire-and-forget; failure shouldn't block UX.
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: historyWithAssistant,
       lastIntent: result.intent,
       lastFilledSlots: result.filled_slots,
       lastApplicationState: result.application_state,
-    })
-    .catch((e) => {
-      console.warn('[SW] upsertConversation mirror failed:', e);
-    });
+    }, '[SW] upsertConversation mirror failed:');
 
   return { type: 'BG_CHAT_RESPONSE', result };
 }
@@ -960,8 +982,7 @@ async function handleConfirm(
         ctx.updatedAt = new Date().toISOString();
         void persistContexts();
         void syncConversationSummaryFromContext(ctx);
-        void apiClient
-          .upsertConversation(msg.conversationId, {
+        void mirrorConversation(msg.conversationId, {
             history: ctx.history,
             status: 'completed',
             lastIntent: ctx.lastIntent,
@@ -969,8 +990,7 @@ async function handleConfirm(
             lastApplicationState: ctx.applicationState,
             confirmedReservationForm: formData,
             confirmedReservationLabel: ctx.confirmedReservationLabel,
-          })
-          .catch((e) => console.warn('[SW] completed mirror failed:', e));
+          }, '[SW] completed mirror failed:');
       }
     })
     .catch((e) => {
@@ -1079,14 +1099,12 @@ async function handleApplySuggestedMemory(
   syncApplicationDraftToAutomation(ctx, formData);
   void persistContexts();
   void syncConversationSummaryFromContext(ctx);
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: ctx.history,
       lastIntent: ctx.lastIntent,
       lastFilledSlots: ctx.lastFilledSlots,
       lastApplicationState: ctx.applicationState,
-    })
-    .catch((e) => console.warn('[SW] applySuggestedMemory mirror failed:', e));
+    }, '[SW] applySuggestedMemory mirror failed:');
 
   return { ok: true, applicationState: ctx.applicationState };
 }
@@ -1118,14 +1136,12 @@ async function handleDismissSuggestedMemory(
   syncApplicationDraftToAutomation(ctx, null);
   void persistContexts();
   void syncConversationSummaryFromContext(ctx);
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: ctx.history,
       lastIntent: ctx.lastIntent,
       lastFilledSlots: ctx.lastFilledSlots,
       lastApplicationState: ctx.applicationState,
-    })
-    .catch((e) => console.warn('[SW] dismissSuggestedMemory mirror failed:', e));
+    }, '[SW] dismissSuggestedMemory mirror failed:');
 
   return { ok: true, applicationState: ctx.applicationState };
 }

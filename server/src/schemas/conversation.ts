@@ -16,6 +16,7 @@ export type ConversationStatus = z.infer<typeof ConversationStatus>;
 export const UpsertConversationBody = z.object({
   history: z.array(ChatMessage),
   status: ConversationStatus.optional(), // 미지정 시 active 유지
+  title: z.string().nullable().optional(),
   lastIntent: z.string().nullable().optional(),
   lastFilledSlots: z.unknown().optional(),
   lastApplicationState: ApplicationState.nullable().optional(),
@@ -27,6 +28,7 @@ export type UpsertConversationBody = z.infer<typeof UpsertConversationBody>;
 export const ConversationDto = z.object({
   id: z.string().uuid(),
   status: ConversationStatus,
+  title: z.string().nullable(),
   history: z.array(ChatMessage),
   lastIntent: z.string().nullable(),
   lastFilledSlots: z.unknown(),
@@ -42,6 +44,7 @@ export type ConversationDto = z.infer<typeof ConversationDto>;
 export const ConversationSummaryDto = z.object({
   id: z.string().uuid(),
   status: ConversationStatus,
+  title: z.string().nullable(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable(),
   firstUserMessage: z.string().nullable(),

@@ -27,6 +27,7 @@ export interface ParseArgs {
 export interface ConversationDto {
   id: string;
   status: ConversationStatus;
+  title: string | null;
   history: ChatMessage[];
   lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
@@ -41,6 +42,7 @@ export interface ConversationDto {
 export interface ConversationSummaryDto {
   id: string;
   status: ConversationStatus;
+  title: string | null;
   updatedAt: string;
   completedAt: string | null;
   firstUserMessage: string | null;
@@ -52,6 +54,7 @@ export interface ConversationSummaryDto {
 export interface UpsertConversationBody {
   history: ChatMessage[];
   status?: ConversationStatus;
+  title?: string | null;
   lastIntent?: Intent | null;
   lastFilledSlots?: FilledSlots | null;
   lastApplicationState?: ApplicationState | null;

@@ -33,7 +33,8 @@ export interface SessionSummary {
   id: string;
   title: string;
   preview: string;
-  when: string;
+  when?: string;
+  updatedAt?: string;
   status: 'active' | 'completed' | 'abandoned' | 'abandoned_user' | 'abandoned_timeout';
 }
 
@@ -61,9 +62,10 @@ export interface SpaceSummary {
   code: string;
   name: string;
   building: string;
-  floor: string;
   capa: string;
   useJojikName?: string;
+  contents?: string | null;
+  limitTimeHHMM?: string | null;
 }
 
 export interface RecommendationSlots {

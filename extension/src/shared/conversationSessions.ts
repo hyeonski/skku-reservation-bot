@@ -11,10 +11,12 @@ export const LEGACY_CONVERSATION_ID_KEY = 'gls_conversation_id_v1';
 export const CONVERSATION_INDEX_KEY = 'gls_conversation_index_v1';
 export const SNAPSHOT_PREFIX = 'gls_popup_snapshot_v1_';
 export const MAX_CONVERSATION_INDEX_ITEMS = 10;
+export const MAX_CONVERSATION_TITLE_LENGTH = 36;
 
 interface SummarySeed {
   id: string;
   status: ConversationStatus;
+  title?: string | null;
   updatedAt?: string | null;
   lastFilledSlots?: FilledSlots | null;
   confirmedReservationLabel?: string | null;
@@ -67,16 +69,21 @@ export function getLastMessagePreview(messages?: ChatMessage[]): string {
 }
 
 export function buildConversationTitle(seed: Omit<SummarySeed, 'id' | 'updatedAt'>): string {
+  const cachedTitle = normalizeWhitespace(seed.title ?? '');
+  if (cachedTitle) return truncate(cachedTitle, MAX_CONVERSATION_TITLE_LENGTH);
+
   const confirmedLabel = normalizeWhitespace(seed.confirmedReservationLabel ?? '');
-  if (confirmedLabel && seed.status === 'completed') return truncate(confirmedLabel, 36);
+  if (confirmedLabel && seed.status === 'completed') {
+    return truncate(confirmedLabel, MAX_CONVERSATION_TITLE_LENGTH);
+  }
 
   const firstUserMessage = normalizeWhitespace(
     seed.firstUserMessage ?? getFirstUserMessage(seed.messages),
   );
-  if (firstUserMessage) return truncate(firstUserMessage, 36);
+  if (firstUserMessage) return truncate(firstUserMessage, MAX_CONVERSATION_TITLE_LENGTH);
 
   const slotSummary = summarizeSlots(seed.lastFilledSlots);
-  if (slotSummary) return truncate(slotSummary, 36);
+  if (slotSummary) return truncate(slotSummary, MAX_CONVERSATION_TITLE_LENGTH);
 
   return '새 대화';
 }

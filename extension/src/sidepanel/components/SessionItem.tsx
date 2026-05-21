@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { MouseEvent } from 'react';
 import { Icon } from '../icons';
 import type { SessionSummary } from '../types';
+import { formatRelativeTime } from '../utils/formatRelativeTime';
 
 interface SessionItemProps {
   session: SessionSummary;
@@ -11,6 +12,7 @@ interface SessionItemProps {
 
 export function SessionItem({ session, onPick, onDelete }: SessionItemProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const whenLabel = session.when ?? (session.updatedAt ? formatRelativeTime(session.updatedAt) : '');
 
   const statusCls = `status-pill ${session.status}`;
 
@@ -40,7 +42,7 @@ export function SessionItem({ session, onPick, onDelete }: SessionItemProps) {
       <div className="row1">
         <div className={statusCls} />
         <div className="title">{session.title}</div>
-        <div className="when">{session.when}</div>
+        <div className="when">{whenLabel}</div>
       </div>
       <div className="preview">{session.preview}</div>
       <button

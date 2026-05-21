@@ -99,9 +99,10 @@ export const MOCK_RECOMMENDED_SPACE: SpaceSummary = {
   code: '230401',
   name: '401호',
   building: '학생회관',
-  floor: '4층',
   capa: '최대 25명',
   useJojikName: '소프트웨어융합대학 행정실',
+  contents: '학생회·동아리 행사 우선, 수업 시간 중 소음 유의',
+  limitTimeHHMM: '2200',
 };
 
 export const MOCK_RECOMMENDED_SLOTS: RecommendationSlots = {

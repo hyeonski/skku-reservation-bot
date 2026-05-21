@@ -16,6 +16,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { HANGSA_LABELS } from '@gls/nexacroPaths';
 import { useChatStateMachine } from './hooks/useChatStateMachine';
 import type { UseConversation } from './hooks/useConversation';
 import { ChatComposer } from './components/ChatComposer';
@@ -90,9 +91,10 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
     code: c.glsSpaceCode,
     name: c.roomName,
     building: c.buildingName,
-    floor: '', // SpaceCandidate 에 floor 미존재 — 빈값으로 두면 building 만 노출.
     capa: `최대 ${c.capacityMax}명`,
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
+    contents: c.contents,
+    limitTimeHHMM: c.limitTimeHHMM,
   };
 }
 
@@ -109,8 +111,11 @@ function draftToFields(
   draft: import('../shared/types').ReservationFormData | null,
 ): DraftFields {
   if (!draft) return {};
+  const categoryLabel =
+    HANGSA_LABELS[draft.hangsaGbCode as keyof typeof HANGSA_LABELS] ??
+    draft.hangsaGbCode;
   return {
-    category: draft.hangsaGbCode || undefined,
+    category: categoryLabel || undefined,
     group: draft.organization || undefined,
     event: draft.eventName || undefined,
     headcount: draft.headcount > 0 ? `${draft.headcount}명` : undefined,

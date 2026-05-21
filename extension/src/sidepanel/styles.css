@@ -386,6 +386,16 @@ input, textarea { font: inherit; color: inherit; }
 }
 .rec-meta .pair { display: flex; gap: 4px; }
 .rec-meta .pair .v { color: var(--text); font-weight: 500; }
+.rec-note {
+  margin-top: 8px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .dept-warn {
   margin-top: 10px;
