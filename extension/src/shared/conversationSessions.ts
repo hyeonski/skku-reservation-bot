@@ -20,6 +20,8 @@ interface SummarySeed {
   updatedAt?: string | null;
   lastFilledSlots?: FilledSlots | null;
   confirmedReservationLabel?: string | null;
+  confirmedSpaceCode?: string | null;
+  confirmedSpaceLabel?: string | null;
   messages?: ChatMessage[];
   firstUserMessage?: string | null;
   lastMessagePreview?: string | null;
@@ -114,6 +116,9 @@ export function makeConversationSessionSummary(
       normalizeWhitespace(
         seed.lastMessagePreview ?? getLastMessagePreview(seed.messages),
       ) || '',
+    confirmedReservationLabel: seed.confirmedReservationLabel ?? null,
+    confirmedSpaceCode: seed.confirmedSpaceCode ?? null,
+    confirmedSpaceLabel: seed.confirmedSpaceLabel ?? null,
   };
 }
 

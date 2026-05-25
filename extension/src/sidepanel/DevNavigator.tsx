@@ -1,6 +1,6 @@
 /**
  * Phase 1c 이후 — chat phase 는 실 state 에서 derive 되므로 점프 의미 없음.
- * 화면(view) 전환 단축 메뉴만 유지. Phase 2 직전에 dev flag 로 wrap 또는 제거.
+ * 화면(view) 전환 단축 메뉴만 유지. App 에서 개발 빌드일 때만 렌더한다.
  */
 
 import type { View } from './App';
@@ -8,7 +8,6 @@ import type { View } from './App';
 const VIEW_OPTIONS: Array<{ id: View; label: string }> = [
   { id: 'onboarding', label: 'Onboarding' },
   { id: 'sessions', label: 'Sessions' },
-  { id: 'sessions-with-reminder', label: 'Sessions + P3' },
   { id: 'chat-start', label: 'Chat — starter' },
   { id: 'chat', label: 'Chat (current)' },
 ];

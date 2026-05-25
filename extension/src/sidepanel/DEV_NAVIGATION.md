@@ -24,13 +24,13 @@ pnpm dev   # http://localhost:8000 에서 Fastify + Prisma 실행
 | 라벨 | 동작 |
 |---|---|
 | Onboarding | 2 스텝 온보딩 (정적) |
-| Sessions | 세션 목록 — reminder 없음 (목록 자체는 mock data) |
-| Sessions + P3 | 세션 목록 상단에 P3 패턴 리마인드 배너 |
+| Sessions | 서버 대화 목록 + P3 리마인드 배너 |
 | Chat — starter | 빈 채팅 + 예시 칩 |
 | Chat (current) | 현재 진행 중인 대화 화면 |
 
-세션 목록의 항목 클릭이나 reminder accept 는 현재 **새 대화로 진입** —
-서버 `GET /conversations/:id` 로 이력 복원하는 작업은 Phase 1d.
+세션 목록의 항목 클릭은 background `POPUP_GET_STATUS` 로 이력을 복원한다.
+reminder accept 는 새 대화를 만들고 서버가 내려준 자연어 prompt 를 기존 채팅
+파이프라인에 넣어 시작한다.
 
 ## End-to-End 자동화 스모크 테스트
 
@@ -76,10 +76,8 @@ pnpm dev   # http://localhost:8000 에서 Fastify + Prisma 실행
 
 ## 알려진 한계 / 다음 phase 로 이월
 
-- 세션 목록은 mock — 실제로 서버에서 conversation history 안 불러옴
-- 이력 복원 (`POPUP_GET_STATUS` 활용) 미구현 — 사이드패널 새로 열면 빈 대화
-- onboarding 완료 flag (`chrome.storage.local.onboardingComplete`) 미저장
-- DevNavigator 가 운영 빌드에서도 보임 — Phase 2 직전에 dev flag wrap 또는 삭제
+- 진행 중 검색 카드의 후보별 marker 전체 복원은 아직 제한적임
+- DevNavigator 는 개발 빌드에서만 보임
 
 ## 메시지 흐름 요약
 

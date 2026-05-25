@@ -15,6 +15,7 @@ import type {
   BgReservationDone,
   ApplicationStateResponse,
   ConversationListResponse,
+  ReminderResponse,
 } from '../shared/messages';
 import type { CoordinatorBroadcast } from './glsCoordinator';
 import type {
@@ -61,6 +62,8 @@ interface ConversationContext {
   applicationState: ApplicationState | null;
   conversationStatus: ConversationStatus;
   confirmedReservationLabel: string | null;
+  confirmedSpaceCode: string | null;
+  confirmedSpaceLabel: string | null;
   updatedAt: string;
   lastStatus: AutomationStatus;
   pendingStart: PendingStartRequest | null;
@@ -115,6 +118,8 @@ function getOrCreateContext(conversationId: string): ConversationContext {
       applicationState: null,
       conversationStatus: 'active',
       confirmedReservationLabel: null,
+      confirmedSpaceCode: null,
+      confirmedSpaceLabel: null,
       updatedAt: new Date().toISOString(),
       lastStatus: { kind: 'idle' },
       pendingStart: null,
@@ -126,6 +131,8 @@ function getOrCreateContext(conversationId: string): ConversationContext {
     ctx.conversationStatus ??= 'active';
     ctx.title ??= null;
     ctx.confirmedReservationLabel ??= null;
+    ctx.confirmedSpaceCode ??= null;
+    ctx.confirmedSpaceLabel ??= null;
     ctx.updatedAt ??= new Date().toISOString();
     ctx.loginPrompt ??= null;
   }
@@ -261,6 +268,8 @@ function buildSummaryFromContext(ctx: ConversationContext): ConversationSessionS
     status: ctx.conversationStatus,
     updatedAt: ctx.updatedAt,
     confirmedReservationLabel: ctx.confirmedReservationLabel,
+    confirmedSpaceCode: ctx.confirmedSpaceCode,
+    confirmedSpaceLabel: ctx.confirmedSpaceLabel,
     messages: ctx.history,
     lastFilledSlots: ctx.lastFilledSlots,
   });
@@ -288,6 +297,8 @@ function buildSummaryFromServer(
     status: row.status,
     updatedAt: row.updatedAt,
     confirmedReservationLabel: row.confirmedReservationLabel,
+    confirmedSpaceCode: row.confirmedSpaceCode,
+    confirmedSpaceLabel: row.confirmedSpaceLabel,
     firstUserMessage: row.firstUserMessage,
     lastMessagePreview: row.lastMessagePreview,
     lastFilledSlots: row.lastFilledSlots,
@@ -363,6 +374,8 @@ async function hydrateContextFromServer(
     ctx.applicationState = dto.lastApplicationState;
     ctx.conversationStatus = dto.status;
     ctx.confirmedReservationLabel = dto.confirmedReservationLabel;
+    ctx.confirmedSpaceCode = dto.confirmedSpaceCode;
+    ctx.confirmedSpaceLabel = dto.confirmedSpaceLabel;
     ctx.updatedAt = dto.updatedAt;
     ctx.lastStatus = { kind: 'idle' };
     ctx.pendingStart = null;
@@ -391,6 +404,8 @@ async function mirrorConversation(
     ctx.title = dto.title;
     ctx.conversationStatus = dto.status;
     ctx.confirmedReservationLabel = dto.confirmedReservationLabel;
+    ctx.confirmedSpaceCode = dto.confirmedSpaceCode;
+    ctx.confirmedSpaceLabel = dto.confirmedSpaceLabel;
     ctx.updatedAt = dto.updatedAt;
     await persistContexts();
     await syncConversationSummaryFromContext(ctx);
@@ -455,6 +470,10 @@ function summarizeReservationLabel(formData: ReservationFormData): string {
   if (!eventName) return organization || '예약 신청';
   if (!organization || eventName.includes(organization)) return eventName;
   return `${organization} ${eventName}`;
+}
+
+function summarizeSpaceLabel(candidate: import('../shared/types').SpaceCandidate): string {
+  return `${candidate.buildingName} ${candidate.roomName}`.trim();
 }
 
 function syncApplicationDraftToAutomation(
@@ -726,13 +745,18 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
           contexts.get(msg.conversationId) ??
           (await hydrateContextFromServer(msg.conversationId));
         const queue = gls.getQueue(msg.conversationId);
+        const restoredStatus =
+          ctx?.conversationStatus === 'completed'
+            ? { kind: 'done' as const, spaceCode: ctx.confirmedSpaceCode ?? 'completed' }
+            : (ctx?.lastStatus ?? { kind: 'idle' as const });
         sendResponse({
-          status: ctx?.lastStatus ?? { kind: 'idle' },
+          status: restoredStatus,
           lastFilledSlots: ctx?.lastFilledSlots ?? null,
           history: ctx?.history ?? [],
           lastProposed: queue?.lastProposed ?? ctx?.lastProposed ?? null,
           pendingFormData: queue?.pendingFormData ?? ctx?.pendingStart?.pendingFormData ?? null,
           applicationState: ctx?.applicationState ?? null,
+          conversationStatus: ctx?.conversationStatus ?? 'active',
         });
       })().catch((e) => sendResponse({ error: (e as Error).message }));
       return true;
@@ -750,6 +774,24 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
           sendResponse({ ok: true, conversations: localIndex });
         }
       })().catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_GET_REMINDER':
+      handleGetReminder()
+        .then((response) => sendResponse(response))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_DISMISS_REMINDER':
+      handleDismissReminder(msg)
+        .then((response) => sendResponse(response))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_ACCEPT_REMINDER':
+      handleAcceptReminder(msg)
+        .then((response) => sendResponse(response))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
 
     case 'POPUP_DELETE_CONVERSATION':
@@ -813,6 +855,8 @@ async function handleChatRequest(
         draft: modified,
         missing_application: [],
         needs_application_collection: false,
+        suggested_memory: null,
+        recommendation: null,
         source: 'user_modified',
       };
     }
@@ -820,6 +864,8 @@ async function handleChatRequest(
 
   ctx.conversationStatus = 'active';
   ctx.confirmedReservationLabel = null;
+  ctx.confirmedSpaceCode = null;
+  ctx.confirmedSpaceLabel = null;
   ctx.updatedAt = new Date().toISOString();
   ctx.lastIntent = result.intent;
   ctx.lastFilledSlots = result.filled_slots;
@@ -827,9 +873,10 @@ async function handleChatRequest(
   syncApplicationDraftToAutomation(ctx, result.application_state.draft);
 
   // Append assistant message to local history so subsequent persists carry it.
+  const assistantMessageTs = new Date().toISOString();
   const historyWithAssistant: import('../shared/types').ChatMessage[] = [
     ...msg.history,
-    { role: 'assistant', content: result.assistant_message },
+    { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
   ];
   ctx.history = historyWithAssistant;
   void persistContexts();
@@ -911,6 +958,25 @@ async function handleOpenLoginTab(
   return { ok: true, tabId: tab.id };
 }
 
+async function handleGetReminder(): Promise<ReminderResponse> {
+  const reminder = await apiClient.getReminder();
+  return { ok: true, reminder };
+}
+
+async function handleDismissReminder(
+  msg: Extract<PopupToBackground, { type: 'POPUP_DISMISS_REMINDER' }>,
+): Promise<ReminderResponse> {
+  const reminder = await apiClient.dismissReminder(msg.reminderId);
+  return { ok: true, reminder };
+}
+
+async function handleAcceptReminder(
+  msg: Extract<PopupToBackground, { type: 'POPUP_ACCEPT_REMINDER' }>,
+): Promise<ReminderResponse> {
+  const reminder = await apiClient.acceptReminder(msg.reminderId);
+  return { ok: true, reminder };
+}
+
 async function handleConfirm(
   msg: Extract<PopupToBackground, { type: 'POPUP_CONFIRM_RESERVATION' }>,
 ): Promise<void> {
@@ -979,6 +1045,8 @@ async function handleConfirm(
       if (ctx) {
         ctx.conversationStatus = 'completed';
         ctx.confirmedReservationLabel = summarizeReservationLabel(formData);
+        ctx.confirmedSpaceCode = candidate.glsSpaceCode;
+        ctx.confirmedSpaceLabel = summarizeSpaceLabel(candidate);
         ctx.updatedAt = new Date().toISOString();
         void persistContexts();
         void syncConversationSummaryFromContext(ctx);
@@ -990,6 +1058,8 @@ async function handleConfirm(
             lastApplicationState: ctx.applicationState,
             confirmedReservationForm: formData,
             confirmedReservationLabel: ctx.confirmedReservationLabel,
+            confirmedSpaceCode: ctx.confirmedSpaceCode,
+            confirmedSpaceLabel: ctx.confirmedSpaceLabel,
           }, '[SW] completed mirror failed:');
       }
     })
@@ -1075,6 +1145,7 @@ async function handleApplySuggestedMemory(
       missing_application: [],
       needs_application_collection: false,
       suggested_memory: null,
+      recommendation: null,
       confidence: {
         organization: 'high',
         eventName: 'high',
@@ -1087,6 +1158,7 @@ async function handleApplySuggestedMemory(
     missing_application: [],
     needs_application_collection: false,
     suggested_memory: null,
+    recommendation: null,
     confidence: {
       organization: 'high',
       eventName: 'high',
@@ -1121,6 +1193,7 @@ async function handleDismissSuggestedMemory(
   ctx.applicationState = {
     ...current,
     suggested_memory: null,
+    recommendation: null,
     draft: null,
     source: null,
     missing_application: ['organization', 'eventName', 'purpose', 'hangsaGbCode'],
@@ -1167,6 +1240,8 @@ async function handleCancel(
     ctx.applicationState = abandoned.lastApplicationState;
     ctx.conversationStatus = abandoned.status;
     ctx.confirmedReservationLabel = abandoned.confirmedReservationLabel;
+    ctx.confirmedSpaceCode = abandoned.confirmedSpaceCode;
+    ctx.confirmedSpaceLabel = abandoned.confirmedSpaceLabel;
     ctx.updatedAt = abandoned.updatedAt;
     await persistContexts();
     await syncConversationSummaryFromContext(ctx);

@@ -67,6 +67,8 @@ export const MOCK_SESSIONS: SessionSummary[] = [
 ];
 
 export const MOCK_REMINDER: ReminderData = {
+  id: 'r-001',
+  status: 'active',
   title: '다음 주 화요일도 학생회 운영회의 예약하시겠어요?',
   pattern: '최근 4주 연속 매주 화요일 18:00–20:00 SW학생회 회의',
   proposed: {
@@ -75,6 +77,7 @@ export const MOCK_REMINDER: ReminderData = {
     space: '학생회관 401호',
     group: 'SW학생회',
     event: '운영회의',
+    prompt: '2026-05-26 18:00부터 20:00까지 20명 SW학생회 운영회의 예약해줘 지난번처럼 학생회관 401호',
   },
 };
 

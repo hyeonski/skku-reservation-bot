@@ -22,6 +22,8 @@ export const UpsertConversationBody = z.object({
   lastApplicationState: ApplicationState.nullable().optional(),
   confirmedReservationForm: ReservationFormData.nullable().optional(),
   confirmedReservationLabel: z.string().nullable().optional(),
+  confirmedSpaceCode: z.string().nullable().optional(),
+  confirmedSpaceLabel: z.string().nullable().optional(),
 });
 export type UpsertConversationBody = z.infer<typeof UpsertConversationBody>;
 
@@ -35,6 +37,8 @@ export const ConversationDto = z.object({
   lastApplicationState: ApplicationState.nullable(),
   confirmedReservationForm: ReservationFormData.nullable(),
   confirmedReservationLabel: z.string().nullable(),
+  confirmedSpaceCode: z.string().nullable(),
+  confirmedSpaceLabel: z.string().nullable(),
   startedAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().nullable(),
@@ -51,5 +55,7 @@ export const ConversationSummaryDto = z.object({
   lastMessagePreview: z.string().nullable(),
   lastFilledSlots: z.unknown(),
   confirmedReservationLabel: z.string().nullable(),
+  confirmedSpaceCode: z.string().nullable(),
+  confirmedSpaceLabel: z.string().nullable(),
 });
 export type ConversationSummaryDto = z.infer<typeof ConversationSummaryDto>;

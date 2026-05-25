@@ -1,53 +1,113 @@
-/**
- * 사이드패널 루트 — Phase 1c (실 데이터 채팅 + GLS 자동화 통합).
- *
- * view 라우팅:
- *   - onboarding         : Onboarding 컴포넌트 (mock)
- *   - sessions           : SessionList (mock — 다음 phase 에서 서버 연결)
- *   - chat-start         : 빈 채팅 + 예시 칩
- *   - chat               : 실 ConversationState 기반 ChatScene
- *
- * 채팅은 useConversation 단일 인스턴스로 운영. "새 대화" 버튼 → newConversation()
- * 으로 state 리셋 + 새 conversationId.
- *
- * 세션 목록의 항목 클릭 시 현재는 새 대화로 진입 — 서버 GET /conversations/:id
- * 로 이력 복원하는 작업은 Phase 1d 로.
- *
- * DevNavigator 는 onboarding / sessions / chat-start 화면 점프 용도로만 유지.
- * 채팅 phase 점프는 더 이상 의미가 없어 (실 state 에서 derive) 메뉴에서 제거.
- */
-
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { ConversationSessionSummary, ReminderDto } from '../shared/types';
 import { ChatScene } from './ChatScene';
 import { ChatStarter } from './components/ChatStarter';
 import { DevNavigator } from './DevNavigator';
-import { MOCK_REMINDER, MOCK_SESSIONS } from './mockData';
 import { Onboarding } from './components/Onboarding';
 import { SessionList } from './components/SessionList';
 import { useConversation } from './hooks/useConversation';
+import type { ReminderData, SessionSummary } from './types';
 
 export type View =
   | 'onboarding'
   | 'sessions'
-  | 'sessions-with-reminder'
   | 'chat-start'
   | 'chat';
 
+const ONBOARDING_KEY = 'onboardingComplete';
+
+async function sendRuntime<T>(msg: unknown): Promise<T> {
+  return (await chrome.runtime.sendMessage(msg)) as T;
+}
+
+function mapSessionSummary(row: ConversationSessionSummary): SessionSummary {
+  const completedPreview =
+    row.status === 'completed'
+      ? `예약 완료 · ${row.confirmedSpaceLabel ?? row.confirmedReservationLabel ?? '완료'}`
+      : '';
+  return {
+    id: row.id,
+    title: row.title,
+    preview: completedPreview || row.lastMessagePreview || '대화 내용 없음',
+    updatedAt: row.updatedAt,
+    status: row.status,
+  };
+}
+
+function mapReminder(row: ReminderDto | null | undefined): ReminderData | null {
+  if (!row) return null;
+  return {
+    id: row.id,
+    status: row.status,
+    title: row.title,
+    pattern: row.pattern,
+    proposed: row.proposed,
+  };
+}
+
 export function App() {
   const [view, setView] = useState<View>('sessions');
+  const [booting, setBooting] = useState(true);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [reminder, setReminder] = useState<ReminderData | null>(null);
   const conv = useConversation();
 
-  const goSessions = useCallback(() => setView('sessions'), []);
+  const refreshSessions = useCallback(async () => {
+    const res = await sendRuntime<{
+      ok: boolean;
+      conversations?: ConversationSessionSummary[];
+      error?: string;
+    }>({ type: 'POPUP_LIST_CONVERSATIONS' });
+    if (!res.ok) throw new Error(res.error ?? '대화 목록을 불러오지 못했습니다.');
+    setSessions((res.conversations ?? []).map(mapSessionSummary));
+  }, []);
+
+  const refreshReminder = useCallback(async () => {
+    const res = await sendRuntime<{
+      ok: boolean;
+      reminder?: ReminderDto | null;
+      error?: string;
+    }>({ type: 'POPUP_GET_REMINDER' });
+    if (!res.ok) throw new Error(res.error ?? '리마인드를 불러오지 못했습니다.');
+    setReminder(mapReminder(res.reminder));
+  }, []);
+
+  const refreshHome = useCallback(async () => {
+    await Promise.all([
+      refreshSessions().catch((error) => console.warn('[sidepanel] session refresh failed', error)),
+      refreshReminder().catch((error) => console.warn('[sidepanel] reminder refresh failed', error)),
+    ]);
+  }, [refreshReminder, refreshSessions]);
+
+  const goSessions = useCallback(() => {
+    setView('sessions');
+    void refreshHome();
+  }, [refreshHome]);
   const goChatStart = useCallback(() => setView('chat-start'), []);
-  const goChat = useCallback(() => setView('chat'), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const got = await chrome.storage.local.get(ONBOARDING_KEY);
+      if (cancelled) return;
+      const complete = got?.[ONBOARDING_KEY] === true;
+      setView(complete ? 'sessions' : 'onboarding');
+      setBooting(false);
+      if (complete) void refreshHome();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshHome]);
+
+  const completeOnboarding = useCallback(async () => {
+    await chrome.storage.local.set({ [ONBOARDING_KEY]: true });
+    goSessions();
+  }, [goSessions]);
 
   const handleStartFromExample = useCallback(
     (text: string) => {
-      // 새 대화로 리셋한 뒤 예시 텍스트를 첫 메시지로 송신.
       conv.newConversation();
-      // newConversation 직후 sendMessage 는 비어있는 history 로 시작하는 게 맞음.
-      // 단일 microtask 안에서 호출하므로 setState 가 아직 반영되지 않았어도
-      // stateRef.current 가 빈 messages 라 OK.
       void conv.sendMessage(text);
       setView('chat');
     },
@@ -59,32 +119,90 @@ export function App() {
     setView('chat-start');
   }, [conv]);
 
+  const handlePickSession = useCallback(
+    async (session: SessionSummary) => {
+      try {
+        await conv.restoreConversation(session.id);
+        setView('chat');
+      } catch (error) {
+        console.warn('[sidepanel] restore conversation failed', error);
+      }
+    },
+    [conv],
+  );
+
+  const handleDeleteSession = useCallback(async (id: string) => {
+    setSessions((prev) => prev.filter((item) => item.id !== id));
+    try {
+      await sendRuntime({ type: 'POPUP_DELETE_CONVERSATION', conversationId: id });
+      await refreshSessions();
+    } catch (error) {
+      console.warn('[sidepanel] delete conversation failed', error);
+      void refreshSessions();
+    }
+  }, [refreshSessions]);
+
+  const handleAcceptReminder = useCallback(async () => {
+    if (!reminder) return;
+    try {
+      const res = await sendRuntime<{
+        ok: boolean;
+        reminder?: ReminderDto | null;
+        error?: string;
+      }>({ type: 'POPUP_ACCEPT_REMINDER', reminderId: reminder.id });
+      if (!res.ok) throw new Error(res.error ?? '리마인드를 수락하지 못했습니다.');
+      const prompt = res.reminder?.proposed.prompt ?? reminder.proposed.prompt;
+      setReminder(null);
+      conv.newConversation();
+      setView('chat');
+      void conv.sendMessage(prompt);
+    } catch (error) {
+      console.warn('[sidepanel] accept reminder failed', error);
+    }
+  }, [conv, reminder]);
+
+  const handleDismissReminder = useCallback(async () => {
+    if (!reminder) return;
+    setReminder(null);
+    try {
+      await sendRuntime({ type: 'POPUP_DISMISS_REMINDER', reminderId: reminder.id });
+    } catch (error) {
+      console.warn('[sidepanel] dismiss reminder failed', error);
+      void refreshReminder();
+    }
+  }, [refreshReminder, reminder]);
+
+  if (booting) {
+    return <div className="sidepanel-root" />;
+  }
+
   let screen: React.ReactNode;
   switch (view) {
     case 'onboarding':
-      screen = <Onboarding onComplete={goSessions} onSkip={goSessions} />;
+      screen = <Onboarding onComplete={completeOnboarding} onSkip={completeOnboarding} />;
       break;
 
     case 'sessions':
-    case 'sessions-with-reminder':
       screen = (
         <SessionList
-          sessions={MOCK_SESSIONS}
-          reminder={view === 'sessions-with-reminder' ? MOCK_REMINDER : null}
-          onPick={() => {
-            // Phase 1d 에서 서버 GET /conversations/:id 로 복원. 지금은 새 대화로 진입.
-            conv.newConversation();
-            goChat();
+          sessions={sessions}
+          reminder={reminder}
+          onPick={(session) => {
+            void handlePickSession(session);
           }}
           onNew={() => {
             conv.newConversation();
             goChatStart();
           }}
-          onAcceptReminder={() => {
-            conv.newConversation();
-            goChat();
+          onDelete={(id) => {
+            void handleDeleteSession(id);
           }}
-          onDismissReminder={() => setView('sessions')}
+          onAcceptReminder={() => {
+            void handleAcceptReminder();
+          }}
+          onDismissReminder={() => {
+            void handleDismissReminder();
+          }}
         />
       );
       break;
@@ -105,7 +223,7 @@ export function App() {
   return (
     <div className="sidepanel-root">
       {screen}
-      <DevNavigator view={view} onView={setView} />
+      {import.meta.env.DEV && <DevNavigator view={view} onView={setView} />}
     </div>
   );
 }

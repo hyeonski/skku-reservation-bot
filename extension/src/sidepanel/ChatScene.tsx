@@ -91,11 +91,22 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
     code: c.glsSpaceCode,
     name: c.roomName,
     building: c.buildingName,
+    floor: deriveFloorLabel(c.roomName, c.glsSpaceCode),
     capa: `최대 ${c.capacityMax}명`,
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
     contents: c.contents,
     limitTimeHHMM: c.limitTimeHHMM,
   };
+}
+
+function deriveFloorLabel(roomName: string, code: string): string | undefined {
+  const roomMatch = roomName.match(/(\d{3,4})\s*호/);
+  const raw = roomMatch?.[1] ?? (code.match(/^(\d{3,4})/)?.[1]);
+  if (!raw) return undefined;
+  const floor = raw.length >= 4 ? raw.slice(0, 2) : raw.slice(0, 1);
+  const parsed = Number.parseInt(floor, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return `${parsed}층`;
 }
 
 function adaptSlots(slots: import('../shared/types').FilledSlots | null): RecommendationSlots {
@@ -153,6 +164,8 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
   );
   const proposed = state.proposedCandidate;
   const draft = state.applicationState?.draft ?? null;
+  const recommendation = state.applicationState?.recommendation ?? null;
+  const suggestedMemory = state.applicationState?.suggested_memory ?? null;
   const draftFields = useMemo(() => draftToFields(draft), [draft]);
   const draftFlags = useMemo(
     () => suggestedFlags(state.applicationState),
@@ -179,7 +192,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
   const showP2 =
-    view.phase === 'meta-p2' && !!state.applicationState?.suggested_memory;
+    view.phase === 'meta-p2' && !!suggestedMemory;
   const showLogin = !!state.loginPrompt;
   const showNoSpace = state.automationStatus.kind === 'no_candidate';
   const submitStep = state.submitStep;
@@ -363,13 +376,13 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
           />
         )}
 
-        {showP2 && state.applicationState?.suggested_memory && (
+        {showP2 && suggestedMemory && (
           <P2SuggestCard
             prev={{
               when: state.slots?.date ?? '',
-              group: state.applicationState.suggested_memory.formData.organization,
-              event: state.applicationState.suggested_memory.formData.eventName,
-              frequencyHint: state.applicationState.suggested_memory.label,
+              group: recommendation?.group ?? suggestedMemory.formData.organization,
+              event: recommendation?.event ?? suggestedMemory.formData.eventName,
+              frequencyHint: suggestedMemory.label,
             }}
             onAccept={() => {
               void conv.applySuggestedMemory();

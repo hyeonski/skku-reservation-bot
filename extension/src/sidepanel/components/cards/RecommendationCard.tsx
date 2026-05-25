@@ -33,7 +33,7 @@ export function RecommendationCard({
           <div className="info">
             <div className="name">{space.name}</div>
             <div className="building">
-              {space.building} · {space.code}
+              {space.building} · {space.floor ?? space.code}
             </div>
             <div className="rec-meta">
               <div className="pair">

@@ -99,7 +99,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           confirmedReservationLabel: true,
         },
         orderBy: { updatedAt: 'desc' },
-        take: 10,
+        take: 4,
       });
 
       const memoryCandidates = memories

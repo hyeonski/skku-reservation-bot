@@ -13,6 +13,7 @@ import type {
   ApplicationState,
   ReservationFormData,
   ConversationStatus,
+  ReminderDto,
 } from '../shared/types';
 import { getOrCreateClientId } from '../shared/clientId';
 
@@ -34,6 +35,8 @@ export interface ConversationDto {
   lastApplicationState: ApplicationState | null;
   confirmedReservationForm: ReservationFormData | null;
   confirmedReservationLabel: string | null;
+  confirmedSpaceCode: string | null;
+  confirmedSpaceLabel: string | null;
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -49,6 +52,8 @@ export interface ConversationSummaryDto {
   lastMessagePreview: string | null;
   lastFilledSlots: FilledSlots | null;
   confirmedReservationLabel: string | null;
+  confirmedSpaceCode: string | null;
+  confirmedSpaceLabel: string | null;
 }
 
 export interface UpsertConversationBody {
@@ -60,6 +65,8 @@ export interface UpsertConversationBody {
   lastApplicationState?: ApplicationState | null;
   confirmedReservationForm?: ReservationFormData | null;
   confirmedReservationLabel?: string | null;
+  confirmedSpaceCode?: string | null;
+  confirmedSpaceLabel?: string | null;
 }
 
 export interface ListSpacesArgs {
@@ -142,6 +149,22 @@ export async function deleteConversation(id: string): Promise<void> {
 
 export async function abandonConversation(id: string): Promise<ConversationDto> {
   return request<ConversationDto>(`/conversations/${encodeURIComponent(id)}/abandon`, {
+    method: 'POST',
+  });
+}
+
+export async function getReminder(): Promise<ReminderDto | null> {
+  return request<ReminderDto | null>('/reminders', { method: 'GET' });
+}
+
+export async function dismissReminder(id: string): Promise<ReminderDto> {
+  return request<ReminderDto>(`/reminders/${encodeURIComponent(id)}/dismiss`, {
+    method: 'POST',
+  });
+}
+
+export async function acceptReminder(id: string): Promise<ReminderDto> {
+  return request<ReminderDto>(`/reminders/${encodeURIComponent(id)}/accept`, {
     method: 'POST',
   });
 }
