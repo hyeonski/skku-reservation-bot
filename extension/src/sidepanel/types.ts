@@ -39,6 +39,8 @@ export interface SessionSummary {
 }
 
 export interface ReminderData {
+  id: string;
+  status?: 'active' | 'dismissed' | 'accepted';
   title: string;
   pattern: string;
   proposed: {
@@ -47,6 +49,7 @@ export interface ReminderData {
     space: string;
     group: string;
     event: string;
+    prompt: string;
   };
 }
 
@@ -62,6 +65,7 @@ export interface SpaceSummary {
   code: string;
   name: string;
   building: string;
+  floor?: string;
   capa: string;
   useJojikName?: string;
   contents?: string | null;

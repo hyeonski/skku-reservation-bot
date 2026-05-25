@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApplicationState } from './state.js';
+import { buildReminderCandidate } from './reminders.js';
 
 const baseSlots = {
   date: '2026-05-20',
@@ -130,6 +131,10 @@ test('buildApplicationState recommends memory when same group+event appears >= 3
   assert.ok(result.applicationState.suggested_memory);
   assert.ok(result.applicationState.recommendation);
   assert.equal(result.applicationState.suggested_memory.label, '최근 3회 같은 행사로 신청');
+  assert.equal(result.applicationState.suggested_memory.reason, 'frequency');
+  assert.equal(result.applicationState.suggested_memory.count, 3);
+  assert.equal(result.applicationState.suggested_memory.frequency, '3_in_recent_4');
+  assert.equal(result.applicationState.suggested_memory.confidence, 0.75);
   assert.equal(result.applicationState.suggested_memory.formData.organization, '소프트웨어학과 학생회');
   assert.equal(result.applicationState.suggested_memory.conversationId, 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa');
   assert.equal(result.applicationState.recommendation.frequency, '3_in_recent_4');
@@ -196,5 +201,74 @@ test('buildApplicationState suggests memory on reuse signal even below frequency
   assert.ok(result.applicationState.suggested_memory);
   assert.ok(result.applicationState.recommendation);
   assert.equal(result.applicationState.suggested_memory.label, '소프트웨어학과 학생회 정기회의');
+  assert.equal(result.applicationState.suggested_memory.reason, 'reuse_signal');
+  assert.equal(result.applicationState.suggested_memory.count, null);
+  assert.equal(result.applicationState.suggested_memory.confidence, 0.72);
   assert.equal(result.applicationState.recommendation.frequency, 'reuse_signal');
+});
+
+test('buildReminderCandidate does not emit below threshold', () => {
+  const formData = {
+    hangsaGbCode: '111',
+    organization: '소프트웨어학과 학생회',
+    eventName: '정기회의',
+    headcount: 8,
+    purpose: '정기회의 진행',
+  };
+
+  const candidate = buildReminderCandidate([
+    {
+      id: 'a',
+      slots: { ...baseSlots, date: '2026-05-05', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+    {
+      id: 'b',
+      slots: { ...baseSlots, date: '2026-05-12', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+  ], '2026-05-13');
+
+  assert.equal(candidate, null);
+});
+
+test('buildReminderCandidate emits weekly pattern at threshold', () => {
+  const formData = {
+    hangsaGbCode: '111',
+    organization: '소프트웨어학과 학생회',
+    eventName: '정기회의',
+    headcount: 8,
+    purpose: '정기회의 진행',
+  };
+
+  const candidate = buildReminderCandidate([
+    {
+      id: 'a',
+      slots: { ...baseSlots, date: '2026-05-05', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+    {
+      id: 'b',
+      slots: { ...baseSlots, date: '2026-05-12', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+    {
+      id: 'c',
+      slots: { ...baseSlots, date: '2026-05-19', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+  ], '2026-05-20');
+
+  assert.ok(candidate);
+  assert.equal(candidate.proposedDate, '2026-05-26');
+  assert.equal(candidate.startTime, '18:00');
+  assert.equal(candidate.endTime, '20:00');
+  assert.equal(candidate.organization, '소프트웨어학과 학생회');
+  assert.equal(candidate.eventName, '정기회의');
+  assert.match(candidate.prompt, /지난번처럼 학생회관 401호/);
 });

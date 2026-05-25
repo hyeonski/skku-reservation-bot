@@ -41,6 +41,9 @@ const CODE_TO_LABEL: Record<string, string> = Object.fromEntries(
 
 const FREQUENCY_THRESHOLD = 3;
 const RECENT_MEMORY_WINDOW = 4;
+const REUSE_SIGNAL_CONFIDENCE = 0.72;
+const FREQUENCY_BASE_CONFIDENCE = 0.75;
+const FREQUENCY_CONFIDENCE_STEP = 0.05;
 
 const APPLICATION_COLLECTOR_PROMPT =
   '신청서에는 어떤 단체의 어떤 행사로 넣을까요? 예: 소프트웨어학과 학생회 정기회의';
@@ -425,10 +428,18 @@ function pickSuggestedMemory(
 
   if (bestGroup) {
     const mostRecent = bestGroup.candidates[0]!;
+    const count = bestGroup.count;
     return {
       conversationId: mostRecent.conversationId,
-      label: `최근 ${bestGroup.count}회 같은 행사로 신청`,
+      label: `최근 ${count}회 같은 행사로 신청`,
       formData: mostRecent.formData,
+      reason: 'frequency',
+      count,
+      frequency: `${count}_in_recent_${RECENT_MEMORY_WINDOW}`,
+      confidence: Math.min(
+        0.95,
+        FREQUENCY_BASE_CONFIDENCE + (count - FREQUENCY_THRESHOLD) * FREQUENCY_CONFIDENCE_STEP,
+      ),
     };
   }
 
@@ -455,21 +466,11 @@ function pickSuggestedMemory(
     conversationId: best.memory.conversationId,
     label: best.memory.label,
     formData: best.memory.formData,
+    reason: 'reuse_signal',
+    count: null,
+    frequency: 'reuse_signal',
+    confidence: REUSE_SIGNAL_CONFIDENCE,
   };
-}
-
-function frequencyFromLabel(label: string): string {
-  const count = Number.parseInt(label.match(/최근\s*(\d+)회/)?.[1] ?? '', 10);
-  if (Number.isFinite(count) && count > 0) {
-    return `${count}_in_recent_${RECENT_MEMORY_WINDOW}`;
-  }
-  return 'reuse_signal';
-}
-
-function confidenceFromLabel(label: string): number {
-  const count = Number.parseInt(label.match(/최근\s*(\d+)회/)?.[1] ?? '', 10);
-  if (!Number.isFinite(count) || count <= 0) return 0.72;
-  return Math.min(0.95, 0.75 + (count - FREQUENCY_THRESHOLD) * 0.05);
 }
 
 function buildRecommendation(
@@ -482,8 +483,47 @@ function buildRecommendation(
     event: memory.formData.eventName,
     category: hangsaLabelFromCode(memory.formData.hangsaGbCode),
     purpose: memory.formData.purpose,
-    confidence: confidenceFromLabel(memory.label),
-    frequency: frequencyFromLabel(memory.label),
+    confidence: memory.confidence,
+    frequency: memory.frequency,
+  };
+}
+
+function normalizeSuggestedMemory(value: unknown): SuggestedApplicationMemory | null {
+  if (!value || typeof value !== 'object') return null;
+  const memory = value as Partial<SuggestedApplicationMemory>;
+  if (
+    typeof memory.conversationId !== 'string' ||
+    typeof memory.label !== 'string' ||
+    !memory.formData
+  ) {
+    return null;
+  }
+
+  const count = Number.parseInt(memory.label.match(/최근\s*(\d+)회/)?.[1] ?? '', 10);
+  const hasFrequencyCount = Number.isFinite(count) && count > 0;
+  const reason = memory.reason ?? (hasFrequencyCount ? 'frequency' : 'reuse_signal');
+  const normalizedCount = memory.count ?? (hasFrequencyCount ? count : null);
+  const frequency =
+    memory.frequency ??
+    (normalizedCount ? `${normalizedCount}_in_recent_${RECENT_MEMORY_WINDOW}` : 'reuse_signal');
+  const confidence =
+    memory.confidence ??
+    (normalizedCount
+      ? Math.min(
+          0.95,
+          FREQUENCY_BASE_CONFIDENCE +
+            (normalizedCount - FREQUENCY_THRESHOLD) * FREQUENCY_CONFIDENCE_STEP,
+        )
+      : REUSE_SIGNAL_CONFIDENCE);
+
+  return {
+    conversationId: memory.conversationId,
+    label: memory.label,
+    formData: memory.formData,
+    reason,
+    count: normalizedCount,
+    frequency,
+    confidence,
   };
 }
 
@@ -618,10 +658,10 @@ export function parseStoredApplicationState(value: unknown): ApplicationState | 
       ? (candidate.missing_application as ApplicationField[])
       : [...APPLICATION_FIELDS],
     needs_application_collection: Boolean(candidate.needs_application_collection),
-    suggested_memory: (candidate.suggested_memory as SuggestedApplicationMemory | null) ?? null,
+    suggested_memory: normalizeSuggestedMemory(candidate.suggested_memory),
     recommendation:
       (candidate.recommendation as ApplicationRecommendation | null) ??
-      buildRecommendation((candidate.suggested_memory as SuggestedApplicationMemory | null) ?? null),
+      buildRecommendation(normalizeSuggestedMemory(candidate.suggested_memory)),
     confidence: cloneConfidence(candidate.confidence as Record<ApplicationField, ConfidenceLevel>),
     source: (candidate.source as ApplicationState['source']) ?? null,
   };

@@ -12,6 +12,7 @@ import type {
   ReservationFormData,
   ApplicationState,
   ConversationSessionSummary,
+  ReminderDto,
 } from './types';
 
 // ---------- popup → background ----------
@@ -71,6 +72,20 @@ export interface PopupListConversations {
 export interface PopupDeleteConversation {
   type: 'POPUP_DELETE_CONVERSATION';
   conversationId: string;
+}
+
+export interface PopupGetReminder {
+  type: 'POPUP_GET_REMINDER';
+}
+
+export interface PopupDismissReminder {
+  type: 'POPUP_DISMISS_REMINDER';
+  reminderId: string;
+}
+
+export interface PopupAcceptReminder {
+  type: 'POPUP_ACCEPT_REMINDER';
+  reminderId: string;
 }
 
 export interface PopupApplySuggestedMemory {
@@ -267,6 +282,12 @@ export interface ConversationListResponse {
   error?: string;
 }
 
+export interface ReminderResponse {
+  ok: boolean;
+  reminder?: ReminderDto | null;
+  error?: string;
+}
+
 // ---------- Union ----------
 
 export type PopupToBackground =
@@ -279,6 +300,9 @@ export type PopupToBackground =
   | PopupGetStatus
   | PopupListConversations
   | PopupDeleteConversation
+  | PopupGetReminder
+  | PopupDismissReminder
+  | PopupAcceptReminder
   | PopupApplySuggestedMemory
   | PopupDismissSuggestedMemory
   | PopupOpenLoginTab;

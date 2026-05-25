@@ -19,6 +19,7 @@ model Client {
   createdAt     DateTime       @default(now()) @map("created_at")
   lastSeenAt    DateTime       @updatedAt @map("last_seen_at")
   conversations Conversation[]
+  reminders     Reminder[]
 
   @@map("client")
 }
@@ -30,6 +31,12 @@ enum ConversationStatus {
   completed
   abandoned_user
   abandoned_timeout
+}
+
+enum ReminderStatus {
+  active
+  dismissed
+  accepted
 }
 
 model Conversation {
@@ -45,6 +52,8 @@ model Conversation {
   lastApplicationState Json?         @map("last_application_state")
   confirmedReservationForm Json?     @map("confirmed_reservation_form")
   confirmedReservationLabel String?  @map("confirmed_reservation_label") @db.VarChar(191)
+  confirmedSpaceCode String?         @map("confirmed_space_code") @db.VarChar(40)
+  confirmedSpaceLabel String?        @map("confirmed_space_label") @db.VarChar(191)
 
   startedAt   DateTime  @default(now()) @map("started_at")
   updatedAt   DateTime  @updatedAt @map("updated_at")
@@ -55,6 +64,37 @@ model Conversation {
   @@index([status, updatedAt])
   @@index([clientId, deletedAt, updatedAt])
   @@map("conversation")
+}
+
+// ---------- P3 패턴 리마인드 ----------
+
+model Reminder {
+  id       String @id @default(uuid()) @db.Char(36)
+  clientId String @map("client_id") @db.Char(36)
+  client   Client @relation(fields: [clientId], references: [id])
+
+  status ReminderStatus @default(active)
+
+  patternKey   String @map("pattern_key") @db.VarChar(191)
+  title        String @db.VarChar(191)
+  pattern      String @db.VarChar(255)
+  proposedDate String @map("proposed_date") @db.VarChar(10)
+  startTime    String @map("start_time") @db.VarChar(5)
+  endTime      String @map("end_time") @db.VarChar(5)
+  headcount    Int
+  organization String @db.VarChar(191)
+  eventName    String @map("event_name") @db.VarChar(191)
+  spaceLabel   String? @map("space_label") @db.VarChar(191)
+  prompt       String @db.Text
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  dismissedAt DateTime? @map("dismissed_at")
+  acceptedAt  DateTime? @map("accepted_at")
+
+  @@unique([clientId, patternKey, proposedDate])
+  @@index([clientId, status, proposedDate])
+  @@map("reminder")
 }
 
 // ---------- 공간 메타데이터 (D-022) ----------

@@ -91,11 +91,22 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
     code: c.glsSpaceCode,
     name: c.roomName,
     building: c.buildingName,
+    floor: deriveFloorLabel(c.roomName, c.glsSpaceCode),
     capa: `최대 ${c.capacityMax}명`,
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
     contents: c.contents,
     limitTimeHHMM: c.limitTimeHHMM,
   };
+}
+
+function deriveFloorLabel(roomName: string, code: string): string | undefined {
+  const roomMatch = roomName.match(/(\d{3,4})\s*호/);
+  const raw = roomMatch?.[1] ?? (code.match(/^(\d{3,4})/)?.[1]);
+  if (!raw) return undefined;
+  const floor = raw.length >= 4 ? raw.slice(0, 2) : raw.slice(0, 1);
+  const parsed = Number.parseInt(floor, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return `${parsed}층`;
 }
 
 function adaptSlots(slots: import('../shared/types').FilledSlots | null): RecommendationSlots {

@@ -50,6 +50,8 @@ function toDto(row: Conversation): z.infer<typeof ConversationDto> {
       (parseStoredReservationForm(row.confirmedReservationForm)
         ? summarizeReservationLabel(parseStoredReservationForm(row.confirmedReservationForm)!)
         : null),
+    confirmedSpaceCode: row.confirmedSpaceCode ?? null,
+    confirmedSpaceLabel: row.confirmedSpaceLabel ?? null,
     startedAt: row.startedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
@@ -98,6 +100,8 @@ function toSummaryDto(row: Conversation): z.infer<typeof ConversationSummaryDto>
       (parseStoredReservationForm(row.confirmedReservationForm)
         ? summarizeReservationLabel(parseStoredReservationForm(row.confirmedReservationForm)!)
         : null),
+    confirmedSpaceCode: row.confirmedSpaceCode ?? null,
+    confirmedSpaceLabel: row.confirmedSpaceLabel ?? null,
   };
 }
 
@@ -199,6 +203,12 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
       ...(body.confirmedReservationLabel !== undefined
         ? { confirmedReservationLabel: body.confirmedReservationLabel }
         : {}),
+      ...(body.confirmedSpaceCode !== undefined
+        ? { confirmedSpaceCode: body.confirmedSpaceCode }
+        : {}),
+      ...(body.confirmedSpaceLabel !== undefined
+        ? { confirmedSpaceLabel: body.confirmedSpaceLabel }
+        : {}),
       ...(isCompleted ? { completedAt: now } : {}),
     };
 
@@ -226,6 +236,12 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
         : {}),
       ...(body.confirmedReservationLabel !== undefined && body.confirmedReservationLabel !== null
         ? { confirmedReservationLabel: body.confirmedReservationLabel }
+        : {}),
+      ...(body.confirmedSpaceCode !== undefined && body.confirmedSpaceCode !== null
+        ? { confirmedSpaceCode: body.confirmedSpaceCode }
+        : {}),
+      ...(body.confirmedSpaceLabel !== undefined && body.confirmedSpaceLabel !== null
+        ? { confirmedSpaceLabel: body.confirmedSpaceLabel }
         : {}),
       ...(isCompleted ? { completedAt: now } : {}),
     };

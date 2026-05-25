@@ -10,6 +10,7 @@ export type MessageRole = z.infer<typeof MessageRole>;
 export const ChatMessage = z.object({
   role: MessageRole,
   content: z.string(),
+  ts: z.string().datetime().optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 
@@ -66,6 +67,10 @@ export const SuggestedApplicationMemory = z.object({
   conversationId: z.string().uuid(),
   label: z.string(),
   formData: ReservationFormData,
+  reason: z.enum(['frequency', 'reuse_signal']),
+  count: z.number().int().positive().nullable(),
+  frequency: z.string(),
+  confidence: z.number().min(0).max(1),
 });
 export type SuggestedApplicationMemory = z.infer<typeof SuggestedApplicationMemory>;
 

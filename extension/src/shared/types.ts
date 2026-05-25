@@ -16,6 +16,7 @@ export type ConversationStatus =
 export interface ChatMessage {
   role: ChatRole;
   content: string;
+  ts?: string;
 }
 
 export interface FilledSlots {
@@ -49,6 +50,10 @@ export interface SuggestedApplicationMemory {
   conversationId: string;
   label: string;
   formData: ReservationFormData;
+  reason: 'frequency' | 'reuse_signal';
+  count: number | null;
+  frequency: string;
+  confidence: number;
 }
 
 export interface ApplicationRecommendation {
@@ -87,6 +92,28 @@ export interface ConversationSessionSummary {
   status: ConversationStatus;
   updatedAt: string;
   lastMessagePreview: string;
+  confirmedReservationLabel?: string | null;
+  confirmedSpaceCode?: string | null;
+  confirmedSpaceLabel?: string | null;
+}
+
+export type ReminderStatus = 'active' | 'dismissed' | 'accepted';
+
+export interface ReminderDto {
+  id: string;
+  status: ReminderStatus;
+  title: string;
+  pattern: string;
+  proposed: {
+    date: string;
+    time: string;
+    space: string;
+    group: string;
+    event: string;
+    prompt: string;
+  };
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** 자동화 탐색 로그 — 후보 1개 시도 결과 */

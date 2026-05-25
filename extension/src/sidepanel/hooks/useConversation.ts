@@ -33,6 +33,7 @@ import type {
   PopupRejectCandidate,
   PopupCancel,
   PopupOpenLoginTab,
+  PopupGetStatus,
 } from '../../shared/messages';
 
 export interface UiMessage {
@@ -40,6 +41,7 @@ export interface UiMessage {
   role: 'user' | 'assistant';
   content: string;
   ts: string;
+  isoTs?: string;
 }
 
 export interface CandidateProgress {
@@ -83,6 +85,13 @@ function nowHHMM(): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+function formatHHMM(value?: string): string {
+  if (!value) return nowHHMM();
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return nowHHMM();
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 function emptyState(conversationId: string): ConversationState {
   return {
     conversationId,
@@ -116,11 +125,13 @@ function nowMessageId(prefix: string): string {
 }
 
 function makeAssistantMessage(content: string): UiMessage {
+  const isoTs = new Date().toISOString();
   return {
     id: nowMessageId('m-a'),
     role: 'assistant',
     content,
-    ts: nowHHMM(),
+    ts: formatHHMM(isoTs),
+    isoTs,
   };
 }
 
@@ -283,15 +294,21 @@ export function useConversation() {
     const conversationId = stateRef.current.conversationId;
     const previousState = stateRef.current;
 
+    const userMessageTs = new Date().toISOString();
     const userMsg: UiMessage = {
       id: nowMessageId('m-u'),
       role: 'user',
       content: trimmed,
-      ts: nowHHMM(),
+      ts: formatHHMM(userMessageTs),
+      isoTs: userMessageTs,
     };
     const historyForServer: ChatMessage[] = [
-      ...stateRef.current.messages.map((m) => ({ role: m.role, content: m.content })),
-      { role: 'user', content: trimmed },
+      ...stateRef.current.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(m.isoTs ? { ts: m.isoTs } : {}),
+      })),
+      { role: 'user', content: trimmed, ts: userMessageTs },
     ];
     setState((s) => ({
       ...s,
@@ -320,11 +337,13 @@ export function useConversation() {
     }
 
     const parsed = res.result;
+    const assistantMessageTs = new Date().toISOString();
     const botMsg: UiMessage = {
       id: nowMessageId('m-a'),
       role: 'assistant',
       content: parsed.assistant_message,
-      ts: nowHHMM(),
+      ts: formatHHMM(assistantMessageTs),
+      isoTs: assistantMessageTs,
     };
     setState((s) => ({
       ...s,
@@ -475,6 +494,39 @@ export function useConversation() {
     }
   }, []);
 
+  const restoreConversation = useCallback(async (conversationId: string) => {
+    const msg: PopupGetStatus = {
+      type: 'POPUP_GET_STATUS',
+      conversationId,
+    };
+    const res = await sendRuntime<{
+      status?: AutomationStatus;
+      lastFilledSlots?: FilledSlots | null;
+      history?: ChatMessage[];
+      lastProposed?: SpaceCandidate | null;
+      applicationState?: ApplicationState | null;
+      error?: string;
+    }>(msg);
+    if (res.error) throw new Error(res.error);
+
+    const restored: ConversationState = {
+      ...emptyState(conversationId),
+      messages: (res.history ?? []).map((m, index) => ({
+        id: `m-r-${index}-${Date.now()}`,
+        role: m.role,
+        content: m.content,
+        ts: formatHHMM(m.ts),
+        isoTs: m.ts,
+      })),
+      slots: res.lastFilledSlots ?? null,
+      applicationState: res.applicationState ?? null,
+      automationStatus: res.status ?? { kind: 'idle' },
+      proposedCandidate: res.lastProposed ?? null,
+    };
+    stateRef.current = restored;
+    setState(restored);
+  }, []);
+
   const cancel = useCallback(async () => {
     const { conversationId } = stateRef.current;
     const msg: PopupCancel = { type: 'POPUP_CANCEL', conversationId };
@@ -487,7 +539,10 @@ export function useConversation() {
 
   /** 새 대화 시작 — 모든 state 리셋 + conversationId 갱신. */
   const newConversation = useCallback(() => {
-    setState(emptyState(freshConversationId()));
+    const next = emptyState(freshConversationId());
+    stateRef.current = next;
+    setState(next);
+    return next.conversationId;
   }, []);
 
   return {
@@ -498,6 +553,7 @@ export function useConversation() {
     openLoginTab,
     applySuggestedMemory,
     dismissSuggestedMemory,
+    restoreConversation,
     cancel,
     newConversation,
   };
