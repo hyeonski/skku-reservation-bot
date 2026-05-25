@@ -14,7 +14,10 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import { ParseRequest, ParseResponse } from '../schemas/parse.js';
-import { parseWithLLM } from '../llm/client.js';
+import {
+  parseWithLLM,
+  summarizeConversationTitle,
+} from '../llm/client.js';
 import {
   buildApplicationState,
   parseStoredApplicationState,
@@ -53,6 +56,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           status: true,
           deletedAt: true,
           lastApplicationState: true,
+          title: true,
         },
       });
 
@@ -129,6 +133,18 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         application_state: applicationResult.applicationState,
       };
 
+      let generatedTitle: string | null = null;
+      if (!existing?.title && llmResult.ready_to_search && applicationResult.intent !== 'cancel') {
+        try {
+          generatedTitle = await summarizeConversationTitle({
+            history: body.history,
+            filledSlots: llmResult.filled_slots,
+          });
+        } catch (err) {
+          request.log.warn({ err }, 'conversation title generation failed during parse');
+        }
+      }
+
       // 3) Conversation mirror upsert (D-018).
       //   - status: 기본 active. intent=cancel 이면 abandoned_user.
       //   - completed 마킹은 실제 예약 제출 시 별도 라우트에서. 여기선 active/abandoned_user 만 다룬다.
@@ -143,12 +159,14 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
             clientId,
             status: nextStatus,
             history: body.history,
+            ...(generatedTitle ? { title: generatedTitle } : {}),
             lastIntent: applicationResult.intent,
             lastFilledSlots: llmResult.filled_slots,
             lastApplicationState: applicationResult.applicationState,
           },
           update: {
             history: body.history,
+            ...(generatedTitle ? { title: generatedTitle } : {}),
             lastIntent: applicationResult.intent,
             lastFilledSlots: llmResult.filled_slots,
             lastApplicationState: applicationResult.applicationState,

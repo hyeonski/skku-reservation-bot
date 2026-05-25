@@ -16,6 +16,7 @@ import type {
   ApplicationStateResponse,
   ConversationListResponse,
 } from '../shared/messages';
+import type { CoordinatorBroadcast } from './glsCoordinator';
 import type {
   AutomationStatus,
   FilledSlots,
@@ -29,6 +30,10 @@ import type {
 import * as apiClient from './apiClient';
 import * as gls from './glsCoordinator';
 import { getOrCreateClientId } from '../shared/clientId';
+import {
+  applyDraftModification,
+  parseModification,
+} from '../sidepanel/utils/parseModification';
 import {
   CONVERSATION_INDEX_KEY,
   isPlaceholderConversationSummary,
@@ -49,6 +54,7 @@ interface PendingStartRequest {
 
 interface ConversationContext {
   conversationId: string;
+  title: string | null;
   history: ChatMessage[];
   lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
@@ -59,13 +65,18 @@ interface ConversationContext {
   lastStatus: AutomationStatus;
   pendingStart: PendingStartRequest | null;
   lastProposed: import('../shared/types').SpaceCandidate | null;
+  loginPrompt:
+    | {
+        variant: 'needed' | 'expired';
+        tabId: number | null;
+      }
+    | null;
 }
 
 const contexts = new Map<string, ConversationContext>();
 const pendingStarts = new Map<string, PendingStartRequest>();
 
 const SESSION_KEY = 'sw_contexts_v1';
-const GLS_URL_PREFIX = 'https://kingoinfo.skku.edu/';
 const rehydrationReady = (async () => {
   await rehydrateContexts();
   await gls.waitForQueuesRehydrated();
@@ -97,6 +108,7 @@ function getOrCreateContext(conversationId: string): ConversationContext {
   if (!ctx) {
     ctx = {
       conversationId,
+      title: null,
       history: [],
       lastIntent: null,
       lastFilledSlots: null,
@@ -107,14 +119,110 @@ function getOrCreateContext(conversationId: string): ConversationContext {
       lastStatus: { kind: 'idle' },
       pendingStart: null,
       lastProposed: null,
+      loginPrompt: null,
     };
     contexts.set(conversationId, ctx);
   } else {
     ctx.conversationStatus ??= 'active';
+    ctx.title ??= null;
     ctx.confirmedReservationLabel ??= null;
     ctx.updatedAt ??= new Date().toISOString();
+    ctx.loginPrompt ??= null;
   }
   return ctx;
+}
+
+function isLoginCompleteUrl(url?: string): boolean {
+  return !!url && url.startsWith('https://kingoinfo.skku.edu/');
+}
+
+function setLoginPrompt(
+  conversationId: string,
+  prompt:
+    | {
+        variant: 'needed' | 'expired';
+        tabId: number | null;
+      }
+    | null,
+): void {
+  const ctx = getOrCreateContext(conversationId);
+  ctx.loginPrompt = prompt;
+  void persistContexts();
+}
+
+function clearLoginPrompt(conversationId: string): void {
+  setLoginPrompt(conversationId, null);
+}
+
+function isSearchReady(slots: FilledSlots | null | undefined): slots is FilledSlots {
+  if (!slots) return false;
+  return Boolean(
+    slots.date &&
+      slots.start_time &&
+      (slots.end_time || slots.duration_min != null) &&
+      slots.headcount != null,
+  );
+}
+
+function formatHour(h: number): string {
+  return `${String(h).padStart(2, '0')}:00`;
+}
+
+function addDaysToIso(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return date;
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function applyRetrySlotAdjustment(base: FilledSlots | null, text: string): FilledSlots | null {
+  if (!base) return null;
+  const next: FilledSlots = { ...base };
+  let changed = false;
+
+  const countMatch = text.match(/(\d+)\s*명/);
+  if (countMatch) {
+    const parsed = Number.parseInt(countMatch[1] ?? '', 10);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed !== next.headcount) {
+      next.headcount = parsed;
+      changed = true;
+    }
+  }
+
+  const rangeMatch = text.match(/(\d{1,2})\s*[-–~]\s*(\d{1,2})\s*시/);
+  if (rangeMatch) {
+    const start = Number.parseInt(rangeMatch[1] ?? '', 10);
+    const end = Number.parseInt(rangeMatch[2] ?? '', 10);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      next.start_time = formatHour(start);
+      next.end_time = formatHour(end);
+      next.duration_min = (end - start) * 60;
+      changed = true;
+    }
+  }
+
+  const durationMatch = text.match(/(\d+)\s*시간/);
+  if (durationMatch && next.start_time) {
+    const hours = Number.parseInt(durationMatch[1] ?? '', 10);
+    if (Number.isFinite(hours) && hours > 0) {
+      next.duration_min = hours * 60;
+      const [sh, sm] = next.start_time.split(':');
+      const endMin =
+        Number.parseInt(sh ?? '0', 10) * 60 +
+        Number.parseInt(sm ?? '0', 10) +
+        hours * 60;
+      next.end_time = `${String(Math.floor(endMin / 60) % 24).padStart(2, '0')}:${String(endMin % 60).padStart(2, '0')}`;
+      changed = true;
+    }
+  }
+
+  if (/다음\s*주/.test(text) && next.date) {
+    next.date = addDaysToIso(next.date, 7);
+    changed = true;
+  }
+
+  if (!changed) return null;
+  return next;
 }
 
 async function loadConversationIndex(): Promise<ConversationSessionSummary[]> {
@@ -149,6 +257,7 @@ async function removeConversationIndexEntry(conversationId: string): Promise<Con
 function buildSummaryFromContext(ctx: ConversationContext): ConversationSessionSummary {
   return makeConversationSessionSummary({
     id: ctx.conversationId,
+    title: ctx.title,
     status: ctx.conversationStatus,
     updatedAt: ctx.updatedAt,
     confirmedReservationLabel: ctx.confirmedReservationLabel,
@@ -175,6 +284,7 @@ function buildSummaryFromServer(
   }
   return makeConversationSessionSummary({
     id: row.id,
+    title: row.title,
     status: row.status,
     updatedAt: row.updatedAt,
     confirmedReservationLabel: row.confirmedReservationLabel,
@@ -247,6 +357,7 @@ async function hydrateContextFromServer(
     const dto = await apiClient.getConversation(conversationId);
     const ctx = getOrCreateContext(conversationId);
     ctx.history = dto.history;
+    ctx.title = dto.title;
     ctx.lastIntent = dto.lastIntent;
     ctx.lastFilledSlots = dto.lastFilledSlots;
     ctx.applicationState = dto.lastApplicationState;
@@ -256,6 +367,7 @@ async function hydrateContextFromServer(
     ctx.lastStatus = { kind: 'idle' };
     ctx.pendingStart = null;
     ctx.lastProposed = null;
+    ctx.loginPrompt = null;
     await persistContexts();
     await syncConversationSummaryFromContext(ctx);
     return ctx;
@@ -264,6 +376,26 @@ async function hydrateContextFromServer(
       return null;
     }
     throw error;
+  }
+}
+
+async function mirrorConversation(
+  conversationId: string,
+  body: apiClient.UpsertConversationBody,
+  warnLabel: string,
+): Promise<void> {
+  try {
+    const dto = await apiClient.upsertConversation(conversationId, body);
+    const ctx = contexts.get(conversationId);
+    if (!ctx) return;
+    ctx.title = dto.title;
+    ctx.conversationStatus = dto.status;
+    ctx.confirmedReservationLabel = dto.confirmedReservationLabel;
+    ctx.updatedAt = dto.updatedAt;
+    await persistContexts();
+    await syncConversationSummaryFromContext(ctx);
+  } catch (e) {
+    console.warn(warnLabel, e);
   }
 }
 
@@ -340,15 +472,11 @@ function syncApplicationDraftToAutomation(
   }
 }
 
-async function shouldSkipNavigationPrompt(): Promise<boolean> {
-  try {
-    const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    return !!activeTab?.url?.startsWith(GLS_URL_PREFIX);
-  } catch {
-    return false;
-  }
-}
-
+/**
+ * 결정 #1 이후 사실상 dead path — `navigation_required` 가 더 이상 생성되지
+ * 않는다. 이전 SW 가 storage 에 남긴 잔여 상태를 정리하기 위한 안전망으로만
+ * 남겨둠. 발견되면 즉시 runReservationFlow 재시작.
+ */
 async function resumePendingStartIfReady(
   conversationId: string,
 ): Promise<void> {
@@ -356,7 +484,6 @@ async function resumePendingStartIfReady(
   const pending = pendingStarts.get(conversationId) ?? ctx.pendingStart;
   if (!pending) return;
   if (ctx.lastStatus.kind !== 'navigation_required') return;
-  if (!(await shouldSkipNavigationPrompt())) return;
 
   const emit = makeStatusEmitter(conversationId);
   pendingStarts.delete(conversationId);
@@ -373,13 +500,23 @@ async function resumePendingStartIfReady(
       pendingFormData: pending.pendingFormData,
       forceNewTab: false,
       onStatusChange: emit,
+      emitBroadcast: broadcastToSidepanel,
     })
     .catch((e) => {
       emit({ kind: 'error', message: (e as Error).message });
     });
 }
 
-// ---------- popup status pushing ----------
+// ---------- popup/sidepanel status pushing ----------
+
+/**
+ * 사이드패널이 후보 검증 진행 / 제출 단계를 풍부하게 표시하도록 broadcast.
+ * AutomationStatus 보다 카드 단위로 의미가 명확한 메시지들 (BG_SEARCH_STARTED,
+ * BG_CANDIDATE_RESULT, BG_SUBMIT_STATUS) 을 일괄 송신. 수신자가 없으면 무시.
+ */
+function broadcastToSidepanel(msg: CoordinatorBroadcast): void {
+  chrome.runtime.sendMessage(msg).catch(() => {});
+}
 
 function makeStatusEmitter(conversationId: string): (s: AutomationStatus) => void {
   return (status) => {
@@ -403,6 +540,25 @@ function makeStatusEmitter(conversationId: string): (s: AutomationStatus) => voi
     // popup may be closed — swallow errors.
     chrome.runtime.sendMessage(msg).catch(() => {});
 
+    if (status.kind === 'login_required') {
+      if (status.reason === 'expired') {
+        chrome.runtime
+          .sendMessage({
+            type: 'SESSION_EXPIRED',
+            conversationId,
+            resumeIdx: status.resumeIdx ?? 0,
+          })
+          .catch(() => {});
+      } else {
+        chrome.runtime
+          .sendMessage({
+            type: 'LOGIN_NEEDED',
+            conversationId,
+          })
+          .catch(() => {});
+      }
+    }
+
     if (status.kind === 'done') {
       const doneMsg: BgReservationDone = {
         type: 'BG_RESERVATION_DONE',
@@ -421,12 +577,73 @@ chrome.runtime.onInstalled.addListener(() => {
   void getOrCreateClientId();
 });
 
+// Action 아이콘 클릭 시 사이드패널을 연다 (D-026 사이드패널 마이그레이션).
+// setPanelBehavior 는 idempotent — 매 SW 기동 시 호출해도 안전.
+chrome.sidePanel
+  ?.setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err) => console.error('[sidePanel.setPanelBehavior] failed', err));
+
 chrome.runtime.onStartup?.addListener(() => {
   void rehydrationReady;
 });
 
 // Best-effort rehydrate on cold module load too.
 void rehydrationReady;
+
+async function resumeAfterLoginComplete(
+  conversationId: string,
+  reason: 'needed' | 'expired',
+  tabId: number,
+): Promise<void> {
+  const emit = makeStatusEmitter(conversationId);
+  const ctx = getOrCreateContext(conversationId);
+  clearLoginPrompt(conversationId);
+
+  chrome.runtime
+    .sendMessage({
+      type: 'LOGIN_COMPLETE',
+      conversationId,
+      tabId,
+      reason,
+    })
+    .catch(() => {});
+
+  if (reason === 'expired' && gls.getQueue(conversationId)) {
+    gls.setQueueTabId(conversationId, tabId);
+    void gls.resumeQueuedSearch(conversationId, emit, broadcastToSidepanel, tabId).catch((e) => {
+      emit({ kind: 'error', message: (e as Error).message });
+    });
+    return;
+  }
+
+  const pending = ctx.pendingStart;
+  if (!pending) return;
+
+  void gls
+    .runReservationFlow({
+      conversationId: pending.conversationId,
+      slots: pending.slots,
+      candidates: pending.candidates,
+      pendingFormData: pending.pendingFormData,
+      existingTabId: tabId,
+      forceNewTab: false,
+      onStatusChange: emit,
+      emitBroadcast: broadcastToSidepanel,
+    })
+    .catch((e) => {
+      emit({ kind: 'error', message: (e as Error).message });
+    });
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  const url = changeInfo.url ?? tab.url;
+  if (!isLoginCompleteUrl(url)) return;
+
+  for (const ctx of contexts.values()) {
+    if (ctx.loginPrompt?.tabId !== tabId) continue;
+    void resumeAfterLoginComplete(ctx.conversationId, ctx.loginPrompt.variant, tabId);
+  }
+});
 
 // ---------- message router ----------
 
@@ -457,14 +674,8 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
 
-    case 'POPUP_CONFIRM_NAVIGATION':
-      handleConfirmNavigation(msg)
-        .then(() => sendResponse({ ok: true }))
-        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
-      return true;
-
-    case 'POPUP_RESUME_AFTER_LOGIN':
-      handleResumeAfterLogin(msg)
+    case 'POPUP_REJECT_CANDIDATE':
+      handleRejectCandidate(msg)
         .then(() => sendResponse({ ok: true }))
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
@@ -483,6 +694,12 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
 
     case 'POPUP_DISMISS_SUGGESTED_MEMORY':
       handleDismissSuggestedMemory(msg)
+        .then((response) => sendResponse(response))
+        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
+      return true;
+
+    case 'POPUP_OPEN_LOGIN_TAB':
+      handleOpenLoginTab(msg)
         .then((response) => sendResponse(response))
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
@@ -552,6 +769,8 @@ async function handleChatRequest(
   msg: Extract<PopupToBackground, { type: 'POPUP_CHAT_REQUEST' }>,
 ): Promise<BgChatResponse> {
   const ctx = getOrCreateContext(msg.conversationId);
+  const previousDraft = ctx.applicationState?.draft ?? null;
+  const previousSlots = ctx.lastFilledSlots;
   // Trust the popup's history snapshot (clientside authority — D-018).
   ctx.history = msg.history;
 
@@ -560,6 +779,44 @@ async function handleChatRequest(
     history: msg.history,
     now: new Date().toISOString(),
   });
+
+  if (
+    ctx.lastStatus.kind === 'no_candidate' &&
+    !result.ready_to_search
+  ) {
+    const adjusted = applyRetrySlotAdjustment(
+      result.filled_slots ?? previousSlots,
+      msg.latestMessage,
+    );
+    if (adjusted) {
+      result.filled_slots = adjusted;
+      result.ready_to_search = isSearchReady(adjusted);
+      if (result.ready_to_search) {
+        result.missing_required = [];
+      }
+    }
+  }
+
+  const parsedDraftCommand = parseModification(msg.latestMessage);
+  if (
+    previousDraft &&
+    (result.intent === 'modify_slot' ||
+      result.intent === 'modify_application' ||
+      parsedDraftCommand.intent === 'edit')
+  ) {
+    const modified =
+      applyDraftModification(previousDraft, parsedDraftCommand) ??
+      null;
+    if (modified) {
+      result.application_state = {
+        ...result.application_state,
+        draft: modified,
+        missing_application: [],
+        needs_application_collection: false,
+        source: 'user_modified',
+      };
+    }
+  }
 
   ctx.conversationStatus = 'active';
   ctx.confirmedReservationLabel = null;
@@ -579,16 +836,12 @@ async function handleChatRequest(
   void syncConversationSummaryFromContext(ctx);
 
   // Mirror to server (D-018). Fire-and-forget; failure shouldn't block UX.
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: historyWithAssistant,
       lastIntent: result.intent,
       lastFilledSlots: result.filled_slots,
       lastApplicationState: result.application_state,
-    })
-    .catch((e) => {
-      console.warn('[SW] upsertConversation mirror failed:', e);
-    });
+    }, '[SW] upsertConversation mirror failed:');
 
   return { type: 'BG_CHAT_RESPONSE', result };
 }
@@ -596,8 +849,13 @@ async function handleChatRequest(
 async function handleStartSearch(
   msg: Extract<PopupToBackground, { type: 'POPUP_START_SEARCH' }>,
 ): Promise<void> {
+  // 사이드패널 마이그레이션 결정 #1: GLS 탭 이동 확인 단계를 제거하고 곧바로
+  // runReservationFlow 로 들어간다. 활성 탭이 GLS 가 아니면 coordinator 가
+  // 비활성 (background) 탭을 직접 새로 열어 진행 — 사용자는 사이드패널에서
+  // SearchProgressCard 로 진행 상황을 보고, 필요시 GLS 탭을 활성화한다.
   const emit = makeStatusEmitter(msg.conversationId);
   const ctx = getOrCreateContext(msg.conversationId);
+  clearLoginPrompt(msg.conversationId);
   ctx.conversationStatus = 'active';
   const pending: PendingStartRequest = {
     conversationId: msg.conversationId,
@@ -610,54 +868,6 @@ async function handleStartSearch(
   ctx.pendingStart = pending;
   void persistContexts();
   void syncConversationSummaryFromContext(ctx);
-  if (await shouldSkipNavigationPrompt()) {
-    void gls
-      .runReservationFlow({
-        conversationId: pending.conversationId,
-        slots: pending.slots,
-        candidates: pending.candidates,
-        pendingFormData: pending.pendingFormData,
-        forceNewTab: false,
-        onStatusChange: emit,
-      })
-      .catch((e) => {
-        emit({ kind: 'error', message: (e as Error).message });
-      });
-    return;
-  }
-  emit({ kind: 'navigation_required' });
-}
-
-async function handleConfirmNavigation(
-  msg: Extract<PopupToBackground, { type: 'POPUP_CONFIRM_NAVIGATION' }>,
-): Promise<void> {
-  const emit = makeStatusEmitter(msg.conversationId);
-  const ctx = getOrCreateContext(msg.conversationId);
-  const pending = pendingStarts.get(msg.conversationId) ?? ctx.pendingStart;
-
-  if (!msg.confirmed) {
-    pendingStarts.delete(msg.conversationId);
-    ctx.pendingStart = null;
-    void persistContexts();
-    emit({ kind: 'idle' });
-    return;
-  }
-
-  if (!pending) {
-    emit({ kind: 'error', message: '이동 대기 중인 예약 요청이 없습니다.' });
-    return;
-  }
-
-  pendingStarts.delete(msg.conversationId);
-  ctx.pendingStart = pending;
-  void persistContexts();
-
-  try {
-    await gls.revealOrCreateGlsTab();
-  } catch (e) {
-    emit({ kind: 'error', message: `GLS 탭 이동 실패: ${(e as Error).message}` });
-    return;
-  }
 
   void gls
     .runReservationFlow({
@@ -667,35 +877,38 @@ async function handleConfirmNavigation(
       pendingFormData: pending.pendingFormData,
       forceNewTab: false,
       onStatusChange: emit,
+      emitBroadcast: broadcastToSidepanel,
     })
     .catch((e) => {
       emit({ kind: 'error', message: (e as Error).message });
     });
 }
 
-async function handleResumeAfterLogin(
-  msg: Extract<PopupToBackground, { type: 'POPUP_RESUME_AFTER_LOGIN' }>,
+/**
+ * 사이드패널이 "다른 공간" 트리거 — 현재 후보 폐기 후 다음 후보부터 iterate
+ * (결정 #2). 큐가 비어있으면 coordinator 가 no_candidate 로 전이.
+ */
+async function handleRejectCandidate(
+  msg: Extract<PopupToBackground, { type: 'POPUP_REJECT_CANDIDATE' }>,
 ): Promise<void> {
   const emit = makeStatusEmitter(msg.conversationId);
-  const ctx = getOrCreateContext(msg.conversationId);
-  const pending = ctx.pendingStart;
-  if (!pending) {
-    emit({ kind: 'error', message: '다시 시작할 예약 요청을 찾지 못했습니다.' });
-    return;
-  }
+  void gls.continueAfterRejection(msg.conversationId, emit, broadcastToSidepanel).catch((e) => {
+    emit({ kind: 'error', message: (e as Error).message });
+  });
+}
 
-  void gls
-    .runReservationFlow({
-      conversationId: pending.conversationId,
-      slots: pending.slots,
-      candidates: pending.candidates,
-      pendingFormData: pending.pendingFormData,
-      forceNewTab: false,
-      onStatusChange: emit,
-    })
-    .catch((e) => {
-      emit({ kind: 'error', message: (e as Error).message });
-    });
+async function handleOpenLoginTab(
+  msg: Extract<PopupToBackground, { type: 'POPUP_OPEN_LOGIN_TAB' }>,
+): Promise<{ ok: true; tabId: number }> {
+  const tab = await chrome.tabs.create({
+    url: 'https://kingoinfo.skku.edu/',
+    active: true,
+  });
+  if (tab.id === undefined) {
+    throw new Error('로그인 탭을 열지 못했습니다.');
+  }
+  setLoginPrompt(msg.conversationId, { variant: msg.variant, tabId: tab.id });
+  return { ok: true, tabId: tab.id };
 }
 
 async function handleConfirm(
@@ -708,7 +921,7 @@ async function handleConfirm(
 
   if (!msg.confirmed) {
     // User rejected the proposed candidate — try the next one.
-    void gls.continueAfterRejection(msg.conversationId, emit).catch((e) => {
+    void gls.continueAfterRejection(msg.conversationId, emit, broadcastToSidepanel).catch((e) => {
       emit({ kind: 'error', message: (e as Error).message });
     });
     return;
@@ -758,6 +971,7 @@ async function handleConfirm(
       startTime: slots.startTime,
       endTime: slots.endTime,
       onStatusChange: emit,
+      emitBroadcast: broadcastToSidepanel,
     })
     .then(async () => {
       // Mark conversation completed on server (mirror).
@@ -768,8 +982,7 @@ async function handleConfirm(
         ctx.updatedAt = new Date().toISOString();
         void persistContexts();
         void syncConversationSummaryFromContext(ctx);
-        void apiClient
-          .upsertConversation(msg.conversationId, {
+        void mirrorConversation(msg.conversationId, {
             history: ctx.history,
             status: 'completed',
             lastIntent: ctx.lastIntent,
@@ -777,8 +990,7 @@ async function handleConfirm(
             lastApplicationState: ctx.applicationState,
             confirmedReservationForm: formData,
             confirmedReservationLabel: ctx.confirmedReservationLabel,
-          })
-          .catch((e) => console.warn('[SW] completed mirror failed:', e));
+          }, '[SW] completed mirror failed:');
       }
     })
     .catch((e) => {
@@ -831,7 +1043,7 @@ async function handlePreview(
   });
 
   if (result.loginRequired) {
-    emit({ kind: 'login_required' });
+    emit({ kind: 'login_required', reason: 'expired' });
     return;
   }
   if (!result.ok) {
@@ -887,14 +1099,12 @@ async function handleApplySuggestedMemory(
   syncApplicationDraftToAutomation(ctx, formData);
   void persistContexts();
   void syncConversationSummaryFromContext(ctx);
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: ctx.history,
       lastIntent: ctx.lastIntent,
       lastFilledSlots: ctx.lastFilledSlots,
       lastApplicationState: ctx.applicationState,
-    })
-    .catch((e) => console.warn('[SW] applySuggestedMemory mirror failed:', e));
+    }, '[SW] applySuggestedMemory mirror failed:');
 
   return { ok: true, applicationState: ctx.applicationState };
 }
@@ -926,14 +1136,12 @@ async function handleDismissSuggestedMemory(
   syncApplicationDraftToAutomation(ctx, null);
   void persistContexts();
   void syncConversationSummaryFromContext(ctx);
-  void apiClient
-    .upsertConversation(msg.conversationId, {
+  void mirrorConversation(msg.conversationId, {
       history: ctx.history,
       lastIntent: ctx.lastIntent,
       lastFilledSlots: ctx.lastFilledSlots,
       lastApplicationState: ctx.applicationState,
-    })
-    .catch((e) => console.warn('[SW] dismissSuggestedMemory mirror failed:', e));
+    }, '[SW] dismissSuggestedMemory mirror failed:');
 
   return { ok: true, applicationState: ctx.applicationState };
 }

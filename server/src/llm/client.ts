@@ -18,11 +18,24 @@ import {
   Intent,
   type ChatMessage,
 } from '../schemas/parse.js';
-import { SYSTEM_PROMPT, renderFewShotBlock } from './prompts.js';
+import {
+  SYSTEM_PROMPT,
+  TITLE_SYSTEM_PROMPT,
+  renderFewShotBlock,
+} from './prompts.js';
+
+const MAX_CONVERSATION_TITLE_LENGTH = 36;
 
 export interface ParseInput {
   history: ChatMessage[];
   now: string;
+}
+
+export interface TitleInput {
+  history: ChatMessage[];
+  filledSlots?: z.infer<typeof FilledSlots> | null;
+  previousTitle?: string | null;
+  confirmedReservationLabel?: string | null;
 }
 
 /**
@@ -37,6 +50,10 @@ const LLMOutput = z.object({
 });
 
 export type LLMParseResult = z.infer<typeof LLMOutput>;
+
+const TitleOutput = z.object({
+  title: z.string(),
+});
 
 let cachedClient: OpenAI | null = null;
 
@@ -110,4 +127,69 @@ export async function parseWithLLM(input: ParseInput): Promise<LLMParseResult> {
   }
 
   return parsed.data;
+}
+
+function normalizeTitle(raw: string): string {
+  const normalized = raw.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > MAX_CONVERSATION_TITLE_LENGTH
+    ? `${normalized.slice(0, MAX_CONVERSATION_TITLE_LENGTH - 1).trimEnd()}…`
+    : normalized;
+}
+
+export async function summarizeConversationTitle(
+  input: TitleInput,
+): Promise<string> {
+  const client = getClient();
+  const payload = {
+    previous_title: input.previousTitle ?? null,
+    confirmed_reservation_label: input.confirmedReservationLabel ?? null,
+    filled_slots: input.filledSlots ?? null,
+    history: input.history,
+  };
+
+  let completion;
+  try {
+    completion = await client.chat.completions.create({
+      model: config.llm.model,
+      messages: [
+        { role: 'system', content: TITLE_SYSTEM_PROMPT },
+        { role: 'user', content: JSON.stringify(payload, null, 2) },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.2,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`LLM title generation failed: ${msg}`);
+  }
+
+  const raw = completion.choices[0]?.message?.content;
+  if (!raw) {
+    throw new Error('LLM returned empty title content');
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`LLM title returned invalid JSON: ${msg}; raw=${raw.slice(0, 200)}`);
+  }
+
+  const parsed = TitleOutput.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(
+      `LLM title response failed schema validation: ${parsed.error.issues
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ')}`,
+    );
+  }
+
+  const title = normalizeTitle(parsed.data.title);
+  if (!title) {
+    throw new Error('LLM title response was blank');
+  }
+
+  return title;
 }

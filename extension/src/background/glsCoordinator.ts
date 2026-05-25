@@ -33,7 +33,18 @@ import type {
   ContentPreviewResult,
   ContentSubmitResult,
   BgCandidateProposal,
+  BgSearchStarted,
+  BgCandidateResult,
+  BgSubmitStatus,
 } from '../shared/messages';
+
+/**
+ * 사이드패널로 직접 broadcast 되는 메시지들 (BG_SEARCH_STARTED 등).
+ * AutomationStatus 와 달리 카드 단위 진행 상태를 풍부하게 표현한다.
+ * SW 가 chrome.runtime.sendMessage 로 일괄 송신하되, 사이드패널이 닫혀 있으면
+ * 무시 (errors swallowed).
+ */
+export type CoordinatorBroadcast = BgSearchStarted | BgCandidateResult | BgSubmitStatus;
 import * as apiClient from './apiClient';
 
 const GLS_URL = 'https://kingoinfo.skku.edu/';
@@ -92,6 +103,13 @@ export async function waitForQueuesRehydrated(): Promise<void> {
 
 export function getQueue(conversationId: string): CandidateQueueState | undefined {
   return queues.get(conversationId);
+}
+
+export function setQueueTabId(conversationId: string, tabId: number): void {
+  const state = queues.get(conversationId);
+  if (!state) return;
+  state.tabId = tabId;
+  void persistQueues();
 }
 
 export function clearQueue(conversationId: string): void {
@@ -308,6 +326,21 @@ async function sendToAutomationTab<TReq, TRes>(tabId: number, msg: TReq): Promis
   }
 }
 
+/**
+ * BG_CANDIDATE_RESULT.why 텍스트로 쓸 짧은 충돌 사유 — SearchProgressCard 우측의
+ * mono 작은 글씨에 들어간다. 충돌이 0개면 빈 문자열, 여러 개면 첫 항목만.
+ */
+function summarizeConflicts(
+  conflicts: ContentAvailabilityResult['conflicts'] | undefined,
+): string {
+  if (!conflicts || conflicts.length === 0) return '충돌';
+  const first = conflicts[0]!;
+  const timePart = first.timeTerm?.trim();
+  if (timePart && first.kind) return `${timePart} ${first.kind}`;
+  if (first.kind) return `${first.kind} 충돌`;
+  return '충돌';
+}
+
 function pickSearchFilters(
   slots: FilledSlots,
 ): { campusCode?: string; buildingNo?: string; building?: string; space?: string } {
@@ -366,16 +399,26 @@ export interface RunReservationFlowArgs {
   conversationId: string;
   slots: FilledSlots;
   onStatusChange: (s: AutomationStatus) => void;
+  /**
+   * 사이드패널이 (사용 시) 풍부한 진행 메시지를 받을 수 있도록 별도 broadcast.
+   * 기존 onStatusChange 는 AutomationStatus 단일 값이지만 SearchProgressCard 는
+   * 후보 리스트와 currentIdx 까지 필요해서 분리.
+   * 없으면 no-op — popup 만 있던 시절 호출자와 호환.
+   */
+  emitBroadcast?: (msg: CoordinatorBroadcast) => void;
   /** Dev: candidates 를 외부에서 주입하면 서버 /spaces 호출을 건너뛴다. */
   candidates?: SpaceCandidate[];
   /** Dev: confirm 시 사용할 formData 를 미리 큐에 저장. */
   pendingFormData?: ReservationFormData;
   /** Dev: 기존 탭 재사용 대신 새 탭 강제 생성. */
   forceNewTab?: boolean;
+  /** 로그인 완료 직후처럼 이미 준비된 GLS 탭이 있으면 재사용한다. */
+  existingTabId?: number;
 }
 
 export async function runReservationFlow(args: RunReservationFlowArgs): Promise<void> {
   const { conversationId, slots, onStatusChange } = args;
+  const emitBroadcast = args.emitBroadcast ?? (() => {});
 
   if (slots.headcount == null) {
     onStatusChange({ kind: 'error', message: 'headcount이 비어 있습니다.' });
@@ -392,7 +435,13 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 
   let tab: chrome.tabs.Tab;
   try {
-    tab = await findOrCreateGlsTab(args.forceNewTab === true);
+    if (args.existingTabId !== undefined) {
+      tab =
+        (await chrome.tabs.get(args.existingTabId).catch(() => undefined)) ??
+        (await findOrCreateGlsTab(args.forceNewTab === true));
+    } else {
+      tab = await findOrCreateGlsTab(args.forceNewTab === true);
+    }
   } catch (e) {
     onStatusChange({ kind: 'error', message: `GLS 탭 열기 실패: ${(e as Error).message}` });
     return;
@@ -415,8 +464,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
   if (!session.loggedIn) {
-    await chrome.tabs.update(tabId, { active: true }).catch(() => {});
-    onStatusChange({ kind: 'login_required' });
+    onStatusChange({ kind: 'login_required', reason: 'needed' });
     return;
   }
 
@@ -468,6 +516,14 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   queues.set(conversationId, state);
   void persistQueues();
 
+  // 검증 시작 시점에 사이드패널이 후보 리스트 전체를 받을 수 있도록 1회 broadcast.
+  // (이후 BG_CANDIDATE_RESULT 가 후보 단위로 도착)
+  emitBroadcast({
+    type: 'BG_SEARCH_STARTED',
+    conversationId,
+    candidates: [...orderedCandidates],
+  });
+
   onStatusChange({
     kind: 'searching',
     tried: 0,
@@ -475,7 +531,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     log: state.log,
   });
 
-  await searchNext(state, onStatusChange);
+  await searchNext(state, onStatusChange, emitBroadcast);
 }
 
 /**
@@ -485,6 +541,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 async function searchNext(
   state: CandidateQueueState,
   onStatusChange: (s: AutomationStatus) => void,
+  emitBroadcast: (msg: CoordinatorBroadcast) => void = () => {},
 ): Promise<void> {
   while (state.remaining.length > 0) {
     const candidate = state.remaining.shift()!;
@@ -524,6 +581,15 @@ async function searchNext(
         total: state.totalCount,
         log: state.log,
       });
+      emitBroadcast({
+        type: 'BG_CANDIDATE_RESULT',
+        conversationId: state.conversationId,
+        spaceCode: candidate.glsSpaceCode,
+        available: false,
+        why: '통신 오류',
+        currentIdx: state.triedCount - 1,
+        total: state.totalCount,
+      });
       void persistQueues();
       continue;
     }
@@ -538,8 +604,23 @@ async function searchNext(
 
     if (result.loginRequired) {
       await chrome.tabs.update(state.tabId, { active: true }).catch(() => {});
-      onStatusChange({ kind: 'login_required' });
-      queues.delete(state.conversationId);
+      // 로그인 만료 — 사이드패널이 GLSLoginCard 를 띄울 수 있도록 알린다.
+      emitBroadcast({
+        type: 'BG_CANDIDATE_RESULT',
+        conversationId: state.conversationId,
+        spaceCode: candidate.glsSpaceCode,
+        available: false,
+        why: '로그인 필요',
+        currentIdx: state.triedCount - 1,
+        total: state.totalCount,
+      });
+      state.remaining.unshift(candidate);
+      state.triedCount = Math.max(0, state.triedCount - 1);
+      onStatusChange({
+        kind: 'login_required',
+        reason: 'expired',
+        resumeIdx: state.triedCount,
+      });
       void persistQueues();
       return;
     }
@@ -547,6 +628,15 @@ async function searchNext(
     if (result.available) {
       state.lastProposed = candidate;
       void persistQueues();
+      emitBroadcast({
+        type: 'BG_CANDIDATE_RESULT',
+        conversationId: state.conversationId,
+        spaceCode: candidate.glsSpaceCode,
+        available: true,
+        why: '가용',
+        currentIdx: state.triedCount - 1,
+        total: state.totalCount,
+      });
       onStatusChange({
         kind: 'candidate_found',
         spaceCode: candidate.glsSpaceCode,
@@ -566,7 +656,16 @@ async function searchNext(
       return;
     }
 
-    // 충돌 — 다음 후보 시도. 누적 로그 emit.
+    // 충돌 — 다음 후보 시도. 누적 로그 + 사이드패널용 single-candidate 결과 모두 emit.
+    emitBroadcast({
+      type: 'BG_CANDIDATE_RESULT',
+      conversationId: state.conversationId,
+      spaceCode: candidate.glsSpaceCode,
+      available: false,
+      why: summarizeConflicts(result.conflicts),
+      currentIdx: state.triedCount - 1,
+      total: state.totalCount,
+    });
     onStatusChange({
       kind: 'searching',
       tried: state.triedCount,
@@ -586,6 +685,7 @@ async function searchNext(
 export async function continueAfterRejection(
   conversationId: string,
   onStatusChange: (s: AutomationStatus) => void,
+  emitBroadcast: (msg: CoordinatorBroadcast) => void = () => {},
 ): Promise<void> {
   const state = queues.get(conversationId);
   if (!state) return;
@@ -598,7 +698,39 @@ export async function continueAfterRejection(
     console.warn('[BG] clear preview form before next candidate failed', e);
   }
   void persistQueues();
-  await searchNext(state, onStatusChange);
+  await searchNext(state, onStatusChange, emitBroadcast);
+}
+
+export async function resumeQueuedSearch(
+  conversationId: string,
+  onStatusChange: (s: AutomationStatus) => void,
+  emitBroadcast: (msg: CoordinatorBroadcast) => void = () => {},
+  existingTabId?: number,
+): Promise<void> {
+  const state = queues.get(conversationId);
+  if (!state) return;
+  if (existingTabId !== undefined) {
+    state.tabId = existingTabId;
+  }
+  void persistQueues();
+
+  try {
+    await ensureAutomationReady(state.tabId);
+  } catch (e) {
+    onStatusChange({
+      kind: 'error',
+      message: `GLS 페이지 준비 실패: ${(e as Error).message}`,
+    });
+    return;
+  }
+
+  onStatusChange({
+    kind: 'searching',
+    tried: state.triedCount,
+    total: state.totalCount,
+    log: state.log,
+  });
+  await searchNext(state, onStatusChange, emitBroadcast);
 }
 
 export interface PreviewReservationArgs {
@@ -644,10 +776,12 @@ export interface SubmitConfirmedArgs {
   startTime: string;
   endTime: string;
   onStatusChange: (s: AutomationStatus) => void;
+  emitBroadcast?: (msg: CoordinatorBroadcast) => void;
 }
 
 export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Promise<void> {
   const { conversationId, candidate, formData, onStatusChange } = args;
+  const emitBroadcast = args.emitBroadcast ?? (() => {});
   const state = queues.get(conversationId);
   const tabId = state?.tabId ?? (await findOrCreateGlsTab()).id;
   if (tabId === undefined) {
@@ -656,6 +790,14 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
   }
 
   onStatusChange({ kind: 'submitting' });
+  // 사이드패널의 SubmitProgressCard 가 진행바를 그릴 수 있도록 단계별 emit.
+  // content script 는 fill→save 를 atomic 하게 처리하므로 'saving' 은 정확한
+  // 경계 없이 0.8 초 후 fake transition. 정확한 신호가 필요해지면 content
+  // script 에서 별도 BG_SUBMIT_PROGRESS 메시지를 emit 하도록 확장.
+  emitBroadcast({ type: 'BG_SUBMIT_STATUS', conversationId, step: 'filling' });
+  const savingTimer = setTimeout(() => {
+    emitBroadcast({ type: 'BG_SUBMIT_STATUS', conversationId, step: 'saving' });
+  }, 800);
 
   let result: ContentSubmitResult;
   try {
@@ -669,15 +811,18 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
       endTime: args.endTime,
     });
   } catch (e) {
+    clearTimeout(savingTimer);
     onStatusChange({ kind: 'error', message: `제출 메시지 실패: ${(e as Error).message}` });
     return;
   }
+  clearTimeout(savingTimer);
 
   if (!result.ok) {
     onStatusChange({ kind: 'error', message: result.error ?? '제출 실패' });
     return;
   }
 
+  emitBroadcast({ type: 'BG_SUBMIT_STATUS', conversationId, step: 'saved' });
   onStatusChange({ kind: 'done', spaceCode: result.spaceCode });
   try {
     await chrome.notifications.create(`reservation-${conversationId}`, {

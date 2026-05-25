@@ -49,14 +49,13 @@ export interface PopupCancel {
   conversationId: string;
 }
 
-export interface PopupConfirmNavigation {
-  type: 'POPUP_CONFIRM_NAVIGATION';
-  conversationId: string;
-  confirmed: boolean;
-}
-
-export interface PopupResumeAfterLogin {
-  type: 'POPUP_RESUME_AFTER_LOGIN';
+/**
+ * 사이드패널이 "다른 공간 찾기" 를 트리거할 때 (핸드오프 결정 #2).
+ * background 는 현재 후보를 폐기하고 다음 후보부터 iterate 재개한다 — 큐가
+ * 비어 있으면 no_candidate 로 전이.
+ */
+export interface PopupRejectCandidate {
+  type: 'POPUP_REJECT_CANDIDATE';
   conversationId: string;
 }
 
@@ -84,6 +83,12 @@ export interface PopupDismissSuggestedMemory {
   conversationId: string;
 }
 
+export interface PopupOpenLoginTab {
+  type: 'POPUP_OPEN_LOGIN_TAB';
+  conversationId: string;
+  variant: 'needed' | 'expired';
+}
+
 // ---------- background → popup ----------
 
 export interface BgChatResponse {
@@ -107,6 +112,62 @@ export interface BgReservationDone {
   type: 'BG_RESERVATION_DONE';
   conversationId: string;
   spaceCode: string;
+}
+
+/**
+ * 후보 검증 시작 시 1회 broadcast — 사이드패널 SearchProgressCard 가 pending
+ * 마커를 그릴 수 있도록 전체 후보 리스트를 한 번에 전달.
+ * (핸드오프 결정 #3 — 분리된 두 메시지 중 첫 번째)
+ */
+export interface BgSearchStarted {
+  type: 'BG_SEARCH_STARTED';
+  conversationId: string;
+  candidates: SpaceCandidate[];
+}
+
+/**
+ * 각 후보 검증 결과. 사이드패널은 currentIdx 로 진행 상태/스피너 위치를 갱신.
+ * available=true 가 마지막 항목이 되며 그 다음에 BG_CANDIDATE_PROPOSAL 이
+ * 별도로 발사된다.
+ */
+export interface BgCandidateResult {
+  type: 'BG_CANDIDATE_RESULT';
+  conversationId: string;
+  spaceCode: string;
+  available: boolean;
+  /** 사이드패널 우측에 표시할 사유 텍스트 ("18:00 충돌" 등). */
+  why?: string;
+  currentIdx: number;
+  total: number;
+}
+
+/**
+ * 신청서 제출 단계 진행 상황. content script 가 fill→save 를 atomic 하게
+ * 처리하므로 'filling' / 'saving' 은 background 에서 시간 경계로 emit 한다.
+ * 'saved' 는 ContentSubmitResult 성공 시.
+ */
+export interface BgSubmitStatus {
+  type: 'BG_SUBMIT_STATUS';
+  conversationId: string;
+  step: 'filling' | 'saving' | 'saved';
+}
+
+export interface LoginNeeded {
+  type: 'LOGIN_NEEDED';
+  conversationId: string;
+}
+
+export interface SessionExpired {
+  type: 'SESSION_EXPIRED';
+  conversationId: string;
+  resumeIdx: number;
+}
+
+export interface LoginComplete {
+  type: 'LOGIN_COMPLETE';
+  conversationId: string;
+  tabId: number;
+  reason: 'needed' | 'expired';
 }
 
 // ---------- background → content (GLS 탭) ----------
@@ -211,8 +272,7 @@ export interface ConversationListResponse {
 export type PopupToBackground =
   | PopupChatRequest
   | PopupStartSearch
-  | PopupConfirmNavigation
-  | PopupResumeAfterLogin
+  | PopupRejectCandidate
   | PopupPreviewReservation
   | PopupConfirmReservation
   | PopupCancel
@@ -220,13 +280,20 @@ export type PopupToBackground =
   | PopupListConversations
   | PopupDeleteConversation
   | PopupApplySuggestedMemory
-  | PopupDismissSuggestedMemory;
+  | PopupDismissSuggestedMemory
+  | PopupOpenLoginTab;
 
 export type BackgroundToPopup =
   | BgChatResponse
   | BgStatusUpdate
   | BgCandidateProposal
-  | BgReservationDone;
+  | BgReservationDone
+  | BgSearchStarted
+  | BgCandidateResult
+  | BgSubmitStatus
+  | LoginNeeded
+  | SessionExpired
+  | LoginComplete;
 
 export type BackgroundToContent =
   | BgCheckSession

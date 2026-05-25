@@ -117,6 +117,17 @@ export const HANGSA_CODES = {
   기타: '117',
 } as const;
 
+export const HANGSA_LABELS: Record<(typeof HANGSA_CODES)[keyof typeof HANGSA_CODES], string> = {
+  '115': '보충수업/특강/시험',
+  '111': '교내단체행사 (학생회/동아리)',
+  '113': '교내단체행사 (세미나/스터디)',
+  '112': '본부부서 주관행사',
+  '114': '단과대학 주관행사',
+  '116': '학과 주관행사',
+  '001': '교외단체행사',
+  '117': '기타',
+};
+
 // ---------- 캠퍼스 코드 ----------
 
 export const CAMPUS_CODES = {

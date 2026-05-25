@@ -19,12 +19,16 @@ import {
   ConversationSummaryDto,
   UpsertConversationBody,
 } from '../schemas/conversation.js';
-import type { ChatMessage } from '../schemas/parse.js';
+import type {
+  ChatMessage,
+  FilledSlots as ParsedFilledSlots,
+} from '../schemas/parse.js';
 import {
   parseStoredApplicationState,
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
+import { summarizeConversationTitle } from '../llm/client.js';
 
 const IdParam = z.object({
   id: z.string().uuid(),
@@ -35,6 +39,7 @@ function toDto(row: Conversation): z.infer<typeof ConversationDto> {
   return {
     id: row.id,
     status: row.status,
+    title: row.title ?? null,
     history: (row.history as unknown as ChatMessage[]) ?? [],
     lastIntent: row.lastIntent ?? null,
     lastFilledSlots: (row.lastFilledSlots as unknown) ?? null,
@@ -82,6 +87,7 @@ function toSummaryDto(row: Conversation): z.infer<typeof ConversationSummaryDto>
   return {
     id: row.id,
     status: row.status,
+    title: row.title ?? null,
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     firstUserMessage: summary.firstUserMessage,
@@ -135,6 +141,19 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
 
     const now = new Date();
     const isCompleted = body.status === 'completed';
+    let generatedTitle: string | null = null;
+    if (isCompleted) {
+      try {
+        generatedTitle = await summarizeConversationTitle({
+          history: body.history,
+          filledSlots: (body.lastFilledSlots as ParsedFilledSlots | null | undefined) ?? null,
+          previousTitle: body.title ?? existing?.title ?? null,
+          confirmedReservationLabel: body.confirmedReservationLabel ?? null,
+        });
+      } catch (err) {
+        req.log.warn({ err }, 'conversation title generation failed during completion');
+      }
+    }
 
     // history / lastFilledSlots 는 JSON 컬럼.
     const historyJson = body.history as unknown as Prisma.InputJsonValue;
@@ -160,6 +179,11 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
     const updateData: Prisma.ConversationUpdateInput = {
       history: historyJson,
       ...(body.status !== undefined ? { status: body.status } : {}),
+      ...(body.title !== undefined
+        ? { title: body.title }
+        : generatedTitle
+          ? { title: generatedTitle }
+          : {}),
       ...(body.lastIntent !== undefined
         ? { lastIntent: body.lastIntent }
         : {}),
@@ -183,6 +207,11 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
       client: { connect: { id: req.clientId } },
       history: historyJson,
       ...(body.status !== undefined ? { status: body.status } : {}),
+      ...(body.title !== undefined
+        ? { title: body.title }
+        : generatedTitle
+          ? { title: generatedTitle }
+          : {}),
       ...(body.lastIntent !== undefined
         ? { lastIntent: body.lastIntent }
         : {}),
