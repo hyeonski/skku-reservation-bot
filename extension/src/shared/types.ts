@@ -51,11 +51,22 @@ export interface SuggestedApplicationMemory {
   formData: ReservationFormData;
 }
 
+export interface ApplicationRecommendation {
+  from_conversation_id: string;
+  group: string;
+  event: string;
+  category: string;
+  purpose: string;
+  confidence: number;
+  frequency: string;
+}
+
 export interface ApplicationState {
   draft: ReservationFormData | null;
   missing_application: ApplicationField[];
   needs_application_collection: boolean;
   suggested_memory: SuggestedApplicationMemory | null;
+  recommendation: ApplicationRecommendation | null;
   confidence: Record<ApplicationField, ApplicationConfidenceLevel>;
   source: ApplicationDraftSource | null;
 }

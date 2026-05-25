@@ -69,11 +69,23 @@ export const SuggestedApplicationMemory = z.object({
 });
 export type SuggestedApplicationMemory = z.infer<typeof SuggestedApplicationMemory>;
 
+export const ApplicationRecommendation = z.object({
+  from_conversation_id: z.string().uuid(),
+  group: z.string(),
+  event: z.string(),
+  category: z.string(),
+  purpose: z.string(),
+  confidence: z.number().min(0).max(1),
+  frequency: z.string(),
+});
+export type ApplicationRecommendation = z.infer<typeof ApplicationRecommendation>;
+
 export const ApplicationState = z.object({
   draft: ReservationFormData.nullable(),
   missing_application: z.array(ApplicationField),
   needs_application_collection: z.boolean(),
   suggested_memory: SuggestedApplicationMemory.nullable(),
+  recommendation: ApplicationRecommendation.nullable(),
   confidence: z.record(ApplicationField, ConfidenceLevel),
   source: z.enum(['conversation', 'memory', 'user_modified']).nullable(),
 });

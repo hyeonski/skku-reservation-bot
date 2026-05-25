@@ -813,6 +813,8 @@ async function handleChatRequest(
         draft: modified,
         missing_application: [],
         needs_application_collection: false,
+        suggested_memory: null,
+        recommendation: null,
         source: 'user_modified',
       };
     }
@@ -1075,6 +1077,7 @@ async function handleApplySuggestedMemory(
       missing_application: [],
       needs_application_collection: false,
       suggested_memory: null,
+      recommendation: null,
       confidence: {
         organization: 'high',
         eventName: 'high',
@@ -1087,6 +1090,7 @@ async function handleApplySuggestedMemory(
     missing_application: [],
     needs_application_collection: false,
     suggested_memory: null,
+    recommendation: null,
     confidence: {
       organization: 'high',
       eventName: 'high',
@@ -1121,6 +1125,7 @@ async function handleDismissSuggestedMemory(
   ctx.applicationState = {
     ...current,
     suggested_memory: null,
+    recommendation: null,
     draft: null,
     source: null,
     missing_application: ['organization', 'eventName', 'purpose', 'hangsaGbCode'],

@@ -1,5 +1,6 @@
 import type {
   ApplicationField,
+  ApplicationRecommendation,
   ApplicationState,
   ChatMessage,
   ConfidenceLevel,
@@ -37,6 +38,9 @@ const LABEL_TO_CODE: Record<string, string> = {
 const CODE_TO_LABEL: Record<string, string> = Object.fromEntries(
   Object.entries(LABEL_TO_CODE).map(([label, code]) => [code, label]),
 );
+
+const FREQUENCY_THRESHOLD = 3;
+const RECENT_MEMORY_WINDOW = 4;
 
 const APPLICATION_COLLECTOR_PROMPT =
   '신청서에는 어떤 단체의 어떤 행사로 넣을까요? 예: 소프트웨어학과 학생회 정기회의';
@@ -88,6 +92,7 @@ function makeEmptyState(): ApplicationState {
     missing_application: [...APPLICATION_FIELDS],
     needs_application_collection: true,
     suggested_memory: null,
+    recommendation: null,
     confidence: { ...DEFAULT_CONFIDENCE },
     source: null,
   };
@@ -384,32 +389,101 @@ function extractTokens(text: string): string[] {
     );
 }
 
+function memoryGroupKey(formData: ReservationFormData): string {
+  const org = normalizeWhitespace(formData.organization).toLowerCase();
+  const event = normalizeWhitespace(formData.eventName).toLowerCase();
+  return `${org}::${event}`;
+}
+
 function pickSuggestedMemory(
   text: string,
   memories: ConversationMemoryCandidate[],
 ): SuggestedApplicationMemory | null {
   if (memories.length === 0) return null;
-  const tokens = extractTokens(text);
-  const reuseSignal = hasReuseSignal(text);
 
+  // Path 1: frequency-based — same (organization, eventName) combo ≥ FREQUENCY_THRESHOLD
+  const groups = new Map<string, ConversationMemoryCandidate[]>();
+  for (const memory of memories) {
+    if (!memory.formData.organization.trim() || !memory.formData.eventName.trim()) continue;
+    const key = memoryGroupKey(memory.formData);
+    const group = groups.get(key);
+    if (group) {
+      group.push(memory);
+    } else {
+      groups.set(key, [memory]);
+    }
+  }
+
+  let bestGroup: { candidates: ConversationMemoryCandidate[]; count: number } | null = null;
+  for (const candidates of groups.values()) {
+    if (candidates.length >= FREQUENCY_THRESHOLD) {
+      if (!bestGroup || candidates.length > bestGroup.count) {
+        bestGroup = { candidates, count: candidates.length };
+      }
+    }
+  }
+
+  if (bestGroup) {
+    const mostRecent = bestGroup.candidates[0]!;
+    return {
+      conversationId: mostRecent.conversationId,
+      label: `최근 ${bestGroup.count}회 같은 행사로 신청`,
+      formData: mostRecent.formData,
+    };
+  }
+
+  // Path 2: reuse-signal fallback — "지난번처럼" etc.
+  if (!hasReuseSignal(text)) return null;
+
+  const tokens = extractTokens(text);
   let best: { memory: ConversationMemoryCandidate; score: number } | null = null;
   for (const memory of memories) {
     const haystack = `${memory.label} ${memory.formData.organization} ${memory.formData.eventName}`.toLowerCase();
-    const overlap = tokens.reduce((count, token) => count + (haystack.includes(token) ? 1 : 0), 0);
-    const score = overlap * 10 + (reuseSignal ? 40 : 0);
-    if (score <= 0) continue;
+    const overlap = tokens.reduce(
+      (count, token) => count + (haystack.includes(token) ? 1 : 0),
+      0,
+    );
+    const score = overlap * 10 + 40;
     if (!best || score > best.score) {
       best = { memory, score };
     }
   }
 
   if (!best) return null;
-  if (!reuseSignal && best.score < 10) return null;
 
   return {
     conversationId: best.memory.conversationId,
     label: best.memory.label,
     formData: best.memory.formData,
+  };
+}
+
+function frequencyFromLabel(label: string): string {
+  const count = Number.parseInt(label.match(/최근\s*(\d+)회/)?.[1] ?? '', 10);
+  if (Number.isFinite(count) && count > 0) {
+    return `${count}_in_recent_${RECENT_MEMORY_WINDOW}`;
+  }
+  return 'reuse_signal';
+}
+
+function confidenceFromLabel(label: string): number {
+  const count = Number.parseInt(label.match(/최근\s*(\d+)회/)?.[1] ?? '', 10);
+  if (!Number.isFinite(count) || count <= 0) return 0.72;
+  return Math.min(0.95, 0.75 + (count - FREQUENCY_THRESHOLD) * 0.05);
+}
+
+function buildRecommendation(
+  memory: SuggestedApplicationMemory | null,
+): ApplicationRecommendation | null {
+  if (!memory) return null;
+  return {
+    from_conversation_id: memory.conversationId,
+    group: memory.formData.organization,
+    event: memory.formData.eventName,
+    category: hangsaLabelFromCode(memory.formData.hangsaGbCode),
+    purpose: memory.formData.purpose,
+    confidence: confidenceFromLabel(memory.label),
+    frequency: frequencyFromLabel(memory.label),
   };
 }
 
@@ -499,7 +573,9 @@ export function buildApplicationState(
   if (!draft && !suggestedMemory) {
     suggestedMemory = pickSuggestedMemory(latestUser, args.memories);
     if (suggestedMemory) {
-      assistantMessage = `지난번 ${suggestedMemory.label} 신청 정보를 추천할게요. 카드에서 선택하거나 새로 설명해 주세요.`;
+      assistantMessage = suggestedMemory.label.startsWith('최근')
+        ? `${suggestedMemory.label}했어요. 같은 정보로 작성할까요?`
+        : `지난번 ${suggestedMemory.label} 정보를 추천할게요. 카드에서 선택하거나 새로 설명해 주세요.`;
     }
   }
 
@@ -518,6 +594,7 @@ export function buildApplicationState(
     missing_application: missing,
     needs_application_collection: needsCollection,
     suggested_memory: suggestedMemory,
+    recommendation: buildRecommendation(suggestedMemory),
     confidence,
     source,
   };
@@ -542,6 +619,9 @@ export function parseStoredApplicationState(value: unknown): ApplicationState | 
       : [...APPLICATION_FIELDS],
     needs_application_collection: Boolean(candidate.needs_application_collection),
     suggested_memory: (candidate.suggested_memory as SuggestedApplicationMemory | null) ?? null,
+    recommendation:
+      (candidate.recommendation as ApplicationRecommendation | null) ??
+      buildRecommendation((candidate.suggested_memory as SuggestedApplicationMemory | null) ?? null),
     confidence: cloneConfidence(candidate.confidence as Record<ApplicationField, ConfidenceLevel>),
     source: (candidate.source as ApplicationState['source']) ?? null,
   };
