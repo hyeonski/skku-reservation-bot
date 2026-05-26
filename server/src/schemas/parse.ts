@@ -67,7 +67,7 @@ const ApplicationDraftData = z.object({
   hangsaGbCode: z.string(),
   organization: z.string(),
   eventName: z.string(),
-  headcount: z.number().int().positive(),
+  headcount: z.number().int().nonnegative(),
   purpose: z.string(),
 });
 

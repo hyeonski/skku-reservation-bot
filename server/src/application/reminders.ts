@@ -1,4 +1,5 @@
 import type { FilledSlots, ReservationFormData } from '../schemas/parse.js';
+import { normalizeWhitespace } from './text.js';
 
 export const REMINDER_PATTERN_THRESHOLD = 3;
 
@@ -37,10 +38,6 @@ interface GroupEntry {
   spaceLabel: string | null;
 }
 
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 function parseIsoDate(date: string): { y: number; m: number; d: number } | null {
   const match = date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -71,7 +68,7 @@ function addDaysIso(date: string, days: number): string {
 
 function nextWeeklyDateAfter(lastDate: string, todayIso: string): string {
   let proposed = addDaysIso(lastDate, 7);
-  while (proposed <= todayIso) {
+  while (proposed < todayIso) {
     proposed = addDaysIso(proposed, 7);
   }
   return proposed;

@@ -114,6 +114,9 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         },
         orderBy: { updatedAt: 'desc' },
         take: 4,
+      }).catch((err) => {
+        request.log.warn({ err }, 'completed conversation memory lookup failed; continuing without memories');
+        return [];
       });
 
       const memoryCandidates = memories

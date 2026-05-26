@@ -19,47 +19,60 @@ import {
   ConversationSummaryDto,
   UpsertConversationBody,
 } from '../schemas/conversation.js';
-import type {
-  ChatMessage,
-  FilledSlots as ParsedFilledSlots,
+import {
+  ChatMessage as ChatMessageSchema,
+  FilledSlots as FilledSlotsSchema,
+  type ChatMessage,
+  type FilledSlots as ParsedFilledSlots,
 } from '../schemas/parse.js';
 import {
   parseStoredApplicationState,
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
+import { normalizeWhitespace } from '../application/text.js';
 import { summarizeConversationTitle } from '../llm/client.js';
+
+const HistoryArray = z.array(ChatMessageSchema);
 
 const IdParam = z.object({
   id: z.string().uuid(),
 });
 
+function parseStoredHistory(value: unknown): ChatMessage[] {
+  const parsed = HistoryArray.safeParse(value);
+  return parsed.success ? parsed.data : [];
+}
+
+function parseStoredFilledSlots(value: unknown): ParsedFilledSlots | null {
+  const parsed = FilledSlotsSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function confirmedLabelFor(row: Conversation): string | null {
+  const formData = parseStoredReservationForm(row.confirmedReservationForm);
+  return row.confirmedReservationLabel ?? (formData ? summarizeReservationLabel(formData) : null);
+}
+
 function toDto(row: Conversation): z.infer<typeof ConversationDto> {
-  // history / lastFilledSlots 는 Prisma Json. 타입 캐스팅으로 그대로 전달.
+  const formData = parseStoredReservationForm(row.confirmedReservationForm);
   return {
     id: row.id,
     status: row.status,
     title: row.title ?? null,
-    history: (row.history as unknown as ChatMessage[]) ?? [],
+    history: parseStoredHistory(row.history),
     lastIntent: row.lastIntent ?? null,
-    lastFilledSlots: (row.lastFilledSlots as unknown) ?? null,
+    lastFilledSlots: parseStoredFilledSlots(row.lastFilledSlots),
     lastApplicationState: parseStoredApplicationState(row.lastApplicationState),
-    confirmedReservationForm: parseStoredReservationForm(row.confirmedReservationForm),
+    confirmedReservationForm: formData,
     confirmedReservationLabel:
-      row.confirmedReservationLabel ??
-      (parseStoredReservationForm(row.confirmedReservationForm)
-        ? summarizeReservationLabel(parseStoredReservationForm(row.confirmedReservationForm)!)
-        : null),
+      row.confirmedReservationLabel ?? (formData ? summarizeReservationLabel(formData) : null),
     confirmedSpaceCode: row.confirmedSpaceCode ?? null,
     confirmedSpaceLabel: row.confirmedSpaceLabel ?? null,
     startedAt: row.startedAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
   };
-}
-
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
 }
 
 function summarizeHistory(history: ChatMessage[]): {
@@ -84,7 +97,7 @@ function summarizeHistory(history: ChatMessage[]): {
 }
 
 function toSummaryDto(row: Conversation): z.infer<typeof ConversationSummaryDto> {
-  const history = (row.history as unknown as ChatMessage[]) ?? [];
+  const history = parseStoredHistory(row.history);
   const summary = summarizeHistory(history);
   return {
     id: row.id,
@@ -94,12 +107,8 @@ function toSummaryDto(row: Conversation): z.infer<typeof ConversationSummaryDto>
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
     firstUserMessage: summary.firstUserMessage,
     lastMessagePreview: summary.lastMessagePreview,
-    lastFilledSlots: (row.lastFilledSlots as unknown) ?? null,
-    confirmedReservationLabel:
-      row.confirmedReservationLabel ??
-      (parseStoredReservationForm(row.confirmedReservationForm)
-        ? summarizeReservationLabel(parseStoredReservationForm(row.confirmedReservationForm)!)
-        : null),
+    lastFilledSlots: parseStoredFilledSlots(row.lastFilledSlots),
+    confirmedReservationLabel: confirmedLabelFor(row),
     confirmedSpaceCode: row.confirmedSpaceCode ?? null,
     confirmedSpaceLabel: row.confirmedSpaceLabel ?? null,
   };

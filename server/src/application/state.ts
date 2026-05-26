@@ -9,6 +9,8 @@ import type {
   ReservationFormData,
   SuggestedApplicationMemory,
 } from '../schemas/parse.js';
+import { ReservationFormData as ReservationFormDataSchema } from '../schemas/parse.js';
+import { normalizeWhitespace } from './text.js';
 
 const APPLICATION_FIELDS: ApplicationField[] = [
   'organization',
@@ -101,10 +103,6 @@ function makeEmptyState(): ApplicationState {
   };
 }
 
-function normalizeWhitespace(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 function cleanSentenceEnding(text: string): string {
   return normalizeWhitespace(
     text
@@ -162,7 +160,7 @@ function baseDraft(headcount: number | null): ReservationFormData {
     hangsaGbCode: '',
     organization: '',
     eventName: '',
-    headcount: headcount ?? 1,
+    headcount: headcount ?? 0,
     purpose: '',
   };
 }
@@ -710,24 +708,8 @@ export function parseStoredApplicationState(value: unknown): ApplicationState | 
 }
 
 export function parseStoredReservationForm(value: unknown): ReservationFormData | null {
-  if (!value || typeof value !== 'object') return null;
-  const candidate = value as Partial<ReservationFormData>;
-  if (
-    typeof candidate.hangsaGbCode !== 'string' ||
-    typeof candidate.organization !== 'string' ||
-    typeof candidate.eventName !== 'string' ||
-    typeof candidate.headcount !== 'number' ||
-    typeof candidate.purpose !== 'string'
-  ) {
-    return null;
-  }
-  return {
-    hangsaGbCode: candidate.hangsaGbCode,
-    organization: candidate.organization,
-    eventName: candidate.eventName,
-    headcount: candidate.headcount,
-    purpose: candidate.purpose,
-  };
+  const parsed = ReservationFormDataSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function hangsaLabelFromCode(code: string): string {

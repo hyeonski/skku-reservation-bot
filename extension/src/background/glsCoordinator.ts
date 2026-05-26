@@ -132,13 +132,25 @@ function shuffleCandidates(candidates: SpaceCandidate[]): SpaceCandidate[] {
 
 // ----- small chrome.* promise helpers -----
 
+async function findReusableGlsTab(): Promise<chrome.tabs.Tab | null> {
+  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (activeTab?.id !== undefined && activeTab.url?.startsWith(GLS_URL)) {
+    return activeTab;
+  }
+
+  const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
+  return existingTabs.find((tab) => tab.id !== undefined) ?? null;
+}
+
 async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
   if (!forceNew) {
+    const reusable = await findReusableGlsTab();
+    if (reusable?.id !== undefined) {
+      return chrome.tabs.update(reusable.id, { active: true });
+    }
+
     const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     if (activeTab?.id !== undefined) {
-      if (activeTab.url?.startsWith(GLS_URL)) {
-        return activeTab;
-      }
       const updated = await chrome.tabs.update(activeTab.id, { url: GLS_URL, active: true });
       return updated;
     }
@@ -152,13 +164,7 @@ async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
 }
 
 export async function revealOrCreateGlsTab(): Promise<chrome.tabs.Tab> {
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (activeTab?.url?.startsWith(GLS_URL) && activeTab.id !== undefined) {
-    return chrome.tabs.update(activeTab.id, { active: true });
-  }
-
-  const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
-  const reusable = existingTabs.find((tab) => tab.id !== undefined) ?? null;
+  const reusable = await findReusableGlsTab();
   if (reusable?.id !== undefined) {
     const updated = await chrome.tabs.update(reusable.id, { active: true });
     if (updated.windowId !== undefined) {
@@ -168,6 +174,21 @@ export async function revealOrCreateGlsTab(): Promise<chrome.tabs.Tab> {
   }
 
   return chrome.tabs.create({ url: GLS_URL, active: true });
+}
+
+async function getExistingOrReusableGlsTab(
+  existingTabId: number | undefined,
+  forceNew: boolean,
+): Promise<chrome.tabs.Tab> {
+  if (existingTabId !== undefined) {
+    const existing = await chrome.tabs.get(existingTabId).catch(() => null);
+    if (existing?.id !== undefined) return existing;
+    if (!forceNew) {
+      const reusable = await findReusableGlsTab();
+      if (reusable?.id !== undefined) return reusable;
+    }
+  }
+  return findOrCreateGlsTab(forceNew);
 }
 
 async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
@@ -459,13 +480,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 
   let tab: chrome.tabs.Tab;
   try {
-    if (args.existingTabId !== undefined) {
-      tab =
-        (await chrome.tabs.get(args.existingTabId).catch(() => undefined)) ??
-        (await findOrCreateGlsTab(args.forceNewTab === true));
-    } else {
-      tab = await findOrCreateGlsTab(args.forceNewTab === true);
-    }
+    tab = await getExistingOrReusableGlsTab(args.existingTabId, args.forceNewTab === true);
   } catch (e) {
     onStatusChange({ kind: 'error', message: `GLS 탭 열기 실패: ${(e as Error).message}` });
     return;

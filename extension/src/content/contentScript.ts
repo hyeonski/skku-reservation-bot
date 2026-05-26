@@ -93,6 +93,41 @@ export async function runInPage<T = unknown>(
   });
 }
 
+function hasCandidate(value: unknown): value is { glsSpaceCode: string } {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as { glsSpaceCode?: unknown }).glsSpaceCode === 'string',
+  );
+}
+
+function assertAvailabilityPayload(
+  msg: BgCheckAvailability,
+): asserts msg is BgCheckAvailability {
+  if (
+    !hasCandidate(msg.candidate) ||
+    typeof msg.date !== 'string' ||
+    typeof msg.startHour !== 'number' ||
+    typeof msg.endHour !== 'number'
+  ) {
+    throw new Error('invalid BG_CHECK_AVAILABILITY payload');
+  }
+}
+
+function assertReservationPayload(
+  msg: BgSubmitReservation | BgPreviewReservation,
+): asserts msg is BgSubmitReservation | BgPreviewReservation {
+  if (
+    !hasCandidate(msg.candidate) ||
+    !msg.formData ||
+    typeof msg.date !== 'string' ||
+    typeof msg.startTime !== 'string' ||
+    typeof msg.endTime !== 'string'
+  ) {
+    throw new Error(`invalid ${msg.type} payload`);
+  }
+}
+
 // ---------- chrome.runtime 메시지 라우터 ----------
 
 chrome.runtime.onMessage.addListener(
@@ -120,6 +155,7 @@ chrome.runtime.onMessage.addListener(
           }
           case 'BG_CHECK_AVAILABILITY': {
             const m = msg as BgCheckAvailability;
+            assertAvailabilityPayload(m);
             const r = await checkAvailability(
               m.candidate,
               m.date,
@@ -143,6 +179,7 @@ chrome.runtime.onMessage.addListener(
           }
           case 'BG_SUBMIT_RESERVATION': {
             const m = msg as BgSubmitReservation;
+            assertReservationPayload(m);
             const r = await submitReservation(
               m.candidate,
               m.formData,
@@ -161,6 +198,7 @@ chrome.runtime.onMessage.addListener(
           }
           case 'BG_PREVIEW_RESERVATION': {
             const m = msg as BgPreviewReservation;
+            assertReservationPayload(m);
             const r = await previewReservationForm(
               m.candidate,
               m.formData,

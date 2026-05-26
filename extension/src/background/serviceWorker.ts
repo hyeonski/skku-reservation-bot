@@ -533,7 +533,11 @@ async function resumePendingStartIfReady(
  * BG_CANDIDATE_RESULT, BG_SUBMIT_STATUS) 을 일괄 송신. 수신자가 없으면 무시.
  */
 function broadcastToSidepanel(msg: CoordinatorBroadcast): void {
-  chrome.runtime.sendMessage(msg).catch(() => {});
+  chrome.runtime.sendMessage(msg).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Receiving end does not exist|Could not establish connection/i.test(message)) return;
+    console.warn('[SW] sidepanel broadcast failed:', error);
+  });
 }
 
 function makeStatusEmitter(conversationId: string): (s: AutomationStatus) => void {

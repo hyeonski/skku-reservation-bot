@@ -166,7 +166,7 @@ function suggestedFlags(
 }
 
 function fieldsAreComplete(d: DraftFields): boolean {
-  return !!(d.category && d.group && d.event && d.purpose);
+  return !!(d.category && d.group && d.event && d.headcount && d.purpose);
 }
 
 // -------------------------------------------------------------------------

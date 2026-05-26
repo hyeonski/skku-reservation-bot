@@ -34,6 +34,21 @@ test('buildApplicationState derives application draft from one-line description'
   assert.equal(result.applicationState?.needs_application_collection, false);
 });
 
+test('buildApplicationState does not default missing headcount to one', () => {
+  const result = buildApplicationState({
+    history: [{ role: 'user', content: '소프트웨어학과 학생회 정기회의' }],
+    latestUserMessage: '소프트웨어학과 학생회 정기회의',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: { ...baseSlots, headcount: null },
+    readyToSearch: false,
+    previousState: null,
+    memories: [],
+  });
+
+  assert.equal(result.applicationState.draft?.headcount, 0);
+});
+
 test('buildApplicationState separates student council group from activity wording', () => {
   const result = buildApplicationState({
     history: [{ role: 'user', content: '소프트웨어학과 학생회 동아리 연습' }],
@@ -394,6 +409,40 @@ test('buildReminderCandidate emits weekly pattern at threshold', () => {
   assert.equal(candidate.organization, '소프트웨어학과 학생회');
   assert.equal(candidate.eventName, '정기회의');
   assert.match(candidate.prompt, /지난번처럼 학생회관 401호/);
+});
+
+test('buildReminderCandidate can propose the same date when next weekly date is today', () => {
+  const formData = {
+    hangsaGbCode: '111',
+    organization: '소프트웨어학과 학생회',
+    eventName: '정기회의',
+    headcount: 8,
+    purpose: '정기회의 진행',
+  };
+
+  const candidate = buildReminderCandidate([
+    {
+      id: 'a',
+      slots: { ...baseSlots, date: '2026-05-05', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+    {
+      id: 'b',
+      slots: { ...baseSlots, date: '2026-05-12', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+    {
+      id: 'c',
+      slots: { ...baseSlots, date: '2026-05-19', start_time: '18:00', end_time: '20:00' },
+      formData,
+      confirmedSpaceLabel: '학생회관 401호',
+    },
+  ], '2026-05-26');
+
+  assert.ok(candidate);
+  assert.equal(candidate.proposedDate, '2026-05-26');
 });
 
 test('applyDeterministicSlotCorrections updates retry headcount chip', () => {
