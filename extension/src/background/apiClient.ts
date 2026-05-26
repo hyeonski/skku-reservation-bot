@@ -97,7 +97,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   headers.set('Accept', 'application/json');
 
-  const res = await fetch(`${SERVER_BASE_URL}${path}`, { ...init, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${SERVER_BASE_URL}${path}`, { ...init, headers });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/failed to fetch|load failed|networkerror/i.test(message)) {
+      throw new Error('서버에 연결할 수 없습니다. 로컬 서버가 실행 중인지 확인해 주세요.');
+    }
+    throw error;
+  }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(res.status, text);

@@ -9,6 +9,10 @@ interface DraftCardProps {
   onEdit: () => void;
   /** true 면 이전 draft 카드 (대체됨) — 흐림 처리, 본문 collapse, 액션 숨김. */
   superseded?: boolean;
+  /** 제출 완료/종료 상태에서는 중복 제출과 사후 수정을 막는다. */
+  locked?: boolean;
+  submitLabel?: string;
+  submitDisabled?: boolean;
 }
 
 const FIELDS: Array<[label: string, key: keyof DraftFields]> = [
@@ -26,6 +30,9 @@ export function DraftCard({
   onSubmit,
   onEdit,
   superseded = false,
+  locked = false,
+  submitLabel,
+  submitDisabled = false,
 }: DraftCardProps) {
   const cardStyle = superseded ? { opacity: 0.55 } : undefined;
 
@@ -62,11 +69,11 @@ export function DraftCard({
             type="button"
             className="btn primary small"
             onClick={onSubmit}
-            disabled={submitting || !draft.group || !draft.event}
+            disabled={locked || submitDisabled || submitting || !draft.group || !draft.event}
           >
-            {submitting ? '제출 중…' : 'GLS 제출'}
+            {locked ? '제출 완료' : submitting ? '제출 중…' : (submitLabel ?? 'GLS 제출')}
           </button>
-          <button type="button" className="btn small" onClick={onEdit}>
+          <button type="button" className="btn small" onClick={onEdit} disabled={locked}>
             수정
           </button>
         </div>

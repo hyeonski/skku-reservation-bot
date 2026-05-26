@@ -19,7 +19,7 @@ export function P2SuggestCard({ prev, onAccept, onDecline }: P2SuggestCardProps)
           <Icon name="sparkles" size={16} />
         </div>
         <div className="content">
-          지난주({prev.when})처럼 <b>{prev.group} {prev.event}</b>로 작성할까요?
+          이전 신청 정보처럼 <b>{prev.group} {prev.event}</b>로 작성할까요?
           {prev.frequencyHint && <div className="src">{prev.frequencyHint}</div>}
           <div className="actions">
             <button type="button" className="btn primary small" onClick={onAccept}>

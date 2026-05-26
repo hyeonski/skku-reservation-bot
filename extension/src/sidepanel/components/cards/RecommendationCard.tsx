@@ -7,9 +7,15 @@ interface RecommendationCardProps {
   onAlternative?: () => void;
 }
 
-function formatLimitTime(limitTimeHHMM?: string | null): string | null {
+function formatLimitDuration(limitTimeHHMM?: string | null): string | null {
   if (!limitTimeHHMM || limitTimeHHMM.length !== 4) return null;
-  return `${limitTimeHHMM.slice(0, 2)}:${limitTimeHHMM.slice(2, 4)}`;
+  const hours = Number.parseInt(limitTimeHHMM.slice(0, 2), 10);
+  const minutes = Number.parseInt(limitTimeHHMM.slice(2, 4), 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  const parts = [];
+  if (hours > 0) parts.push(`${hours}시간`);
+  if (minutes > 0) parts.push(`${minutes}분`);
+  return parts.length > 0 ? parts.join(' ') : null;
 }
 
 export function RecommendationCard({
@@ -17,7 +23,7 @@ export function RecommendationCard({
   slots,
   onAlternative,
 }: RecommendationCardProps) {
-  const limitTime = formatLimitTime(space.limitTimeHHMM);
+  const limitDuration = formatLimitDuration(space.limitTimeHHMM);
 
   return (
     <div className="card">
@@ -50,10 +56,10 @@ export function RecommendationCard({
                 <span>날짜</span>
                 <span className="v">{slots.date}</span>
               </div>
-              {limitTime && (
+              {limitDuration && (
                 <div className="pair">
-                  <span>운영시간</span>
-                  <span className="v">~{limitTime}</span>
+                  <span>최대 대여</span>
+                  <span className="v">{limitDuration}</span>
                 </div>
               )}
             </div>

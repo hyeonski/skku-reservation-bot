@@ -101,6 +101,14 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
 
 function deriveFloorLabel(roomName: string, code: string): string | undefined {
   const roomMatch = roomName.match(/(\d{3,4})\s*호/);
+  if (!roomMatch) {
+    const glsCodeMatch = code.match(/^(\d{5})/);
+    if (glsCodeMatch) {
+      const floorFromCode = Number.parseInt(glsCodeMatch[1]![2]!, 10);
+      if (Number.isFinite(floorFromCode) && floorFromCode > 0) return `${floorFromCode}층`;
+    }
+  }
+
   const raw = roomMatch?.[1] ?? (code.match(/^(\d{3,4})/)?.[1]);
   if (!raw) return undefined;
   const floor = raw.length >= 4 ? raw.slice(0, 2) : raw.slice(0, 1);
@@ -109,12 +117,27 @@ function deriveFloorLabel(roomName: string, code: string): string | undefined {
   return `${parsed}층`;
 }
 
+function addMinutesToTime(startTime: string | null | undefined, minutes: number | null | undefined): string {
+  if (!startTime || minutes == null) return '';
+  const [hourRaw, minuteRaw] = startTime.split(':');
+  const hour = Number.parseInt(hourRaw ?? '', 10);
+  const minute = Number.parseInt(minuteRaw ?? '', 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return '';
+
+  const total = hour * 60 + minute + minutes;
+  const normalized = ((total % (24 * 60)) + 24 * 60) % (24 * 60);
+  const nextHour = Math.floor(normalized / 60);
+  const nextMinute = normalized % 60;
+  return `${String(nextHour).padStart(2, '0')}:${String(nextMinute).padStart(2, '0')}`;
+}
+
 function adaptSlots(slots: import('../shared/types').FilledSlots | null): RecommendationSlots {
   if (!slots) return { date: '', start: '', end: '' };
+  const end = slots.end_time ?? addMinutesToTime(slots.start_time, slots.duration_min);
   return {
     date: slots.date ?? '',
     start: slots.start_time ?? '',
-    end: slots.end_time ?? '',
+    end,
   };
 }
 
@@ -187,7 +210,6 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
 
   const showRecommendation = !!proposed;
   const showDraft =
-    !!proposed &&
     fieldsAreComplete(draftFields) &&
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
@@ -196,6 +218,10 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
   const showLogin = !!state.loginPrompt;
   const showNoSpace = state.automationStatus.kind === 'no_candidate';
   const submitStep = state.submitStep;
+  const submissionLocked =
+    submitStep === 'saved' ||
+    state.automationStatus.kind === 'done' ||
+    view.phase === 'done';
   const showPreparingSearchCard =
     state.automationStatus.kind === 'opening_gls' && state.candidates.length === 0;
   const visibleHints = manualHints ?? view.hints;
@@ -291,6 +317,10 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
 
   const onSubmitDraft = () => {
     if (!draft) return;
+    if (!proposed) {
+      void conv.restartSearch();
+      return;
+    }
     const formData: ReservationFormData = draft;
     void conv.confirmReservation(formData);
   };
@@ -400,6 +430,8 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
             suggested={snapshot.suggested}
             superseded={snapshot.superseded}
             submitting={!snapshot.superseded && (submitStep === 'filling' || submitStep === 'saving')}
+            locked={!snapshot.superseded && submissionLocked}
+            submitLabel={!proposed ? '공간 다시 확인' : undefined}
             onSubmit={onSubmitDraft}
             onEdit={onEditDraft}
           />
@@ -417,6 +449,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
       <div className="popup-foot">
         <HintChips chips={visibleHints} onClick={onHintClick} />
         <ChatComposer
+          key={view.phase}
           value={composerValue}
           onChange={setComposerValue}
           onSend={onSend}

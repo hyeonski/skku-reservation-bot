@@ -86,12 +86,29 @@ function isDisabled(phase: ChatPhase): boolean {
   );
 }
 
+function hasReviewableDraft(s: ConversationState): boolean {
+  const draft = s.applicationState?.draft;
+  return Boolean(
+    s.proposedCandidate &&
+      draft?.hangsaGbCode?.trim() &&
+      draft.organization?.trim() &&
+      draft.eventName?.trim() &&
+      draft.purpose?.trim() &&
+      s.submitStep === null &&
+      s.automationStatus.kind !== 'done',
+  );
+}
+
 function derivePhase(s: ConversationState): ChatPhase {
   // 1) 제출 진행 / 완료 우선.
   if (s.submitStep === 'saved' || s.automationStatus.kind === 'done') return 'done';
   if (s.submitStep === 'filling' || s.submitStep === 'saving' || s.automationStatus.kind === 'submitting') {
     return 'submitting';
   }
+
+  // 후보와 완성된 신청 정보가 있으면 자동화 세부 상태보다 검토 단계를 우선한다.
+  // Search/Draft 카드는 스냅샷으로 남기 때문에 phase 도 같은 UX 단계에 고정한다.
+  if (hasReviewableDraft(s)) return 'draft';
 
   // 2) automation 상태 분기.
   const auto = s.automationStatus.kind;
@@ -107,10 +124,6 @@ function derivePhase(s: ConversationState): ChatPhase {
   if (auto === 'no_candidate') return 'failed-retry';
   if (auto === 'candidate_found') {
     // 후보 확정 — applicationState.draft 가 완성됐으면 draft, 아니면 meta-collect.
-    const draft = s.applicationState?.draft;
-    if (draft && draft.organization && draft.eventName && draft.purpose && draft.hangsaGbCode) {
-      return 'draft';
-    }
     // P2 메모리 추천이 있고 사용자가 아직 수락/거절 안 한 상태면 meta-p2.
     if (s.applicationState?.suggested_memory) return 'meta-p2';
     return 'meta-collect';

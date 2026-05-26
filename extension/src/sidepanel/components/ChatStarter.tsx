@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { ChatHeader } from './ChatHeader';
+import { ChatComposer } from './ChatComposer';
 
 interface ChatStarterProps {
   onSendStarter: (text: string) => void;
@@ -12,6 +14,15 @@ const EXAMPLES = [
 ];
 
 export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
+  const [text, setText] = useState('');
+
+  const send = () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    onSendStarter(trimmed);
+    setText('');
+  };
+
   return (
     <div className="screen">
       <ChatHeader title="새 대화" onBack={onBack} />
@@ -45,6 +56,14 @@ export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
             ))}
           </div>
         </div>
+      </div>
+      <div className="popup-foot">
+        <ChatComposer
+          value={text}
+          onChange={setText}
+          onSend={send}
+          placeholder="예: 2026년 6월 2일 14시 10명 2공학관"
+        />
       </div>
     </div>
   );

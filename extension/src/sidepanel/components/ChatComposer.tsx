@@ -34,10 +34,19 @@ export function ChatComposer({
 
   const canSend = !disabled && value.trim().length > 0;
 
+  const sendAndClear = () => {
+    if (!canSend) return;
+    onSend();
+    if (ref.current) {
+      ref.current.value = '';
+      ref.current.style.height = '22px';
+    }
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
-      if (canSend) onSend();
+      sendAndClear();
     }
   };
 
@@ -56,7 +65,7 @@ export function ChatComposer({
         type="button"
         className="send-btn"
         disabled={!canSend}
-        onClick={onSend}
+        onClick={sendAndClear}
         title="전송"
       >
         <Icon name="send" size={14} />

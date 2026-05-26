@@ -49,7 +49,12 @@ export function SearchProgressCard({
             {candidates.map((c, i) => {
               let cls: 'pending' | 'active' | 'done' | 'found' = 'pending';
               if (frozen) {
-                cls = c.result === 'found' ? 'found' : 'done';
+                cls =
+                  c.result === 'found'
+                    ? 'found'
+                    : c.result === 'fail'
+                      ? 'done'
+                      : 'pending';
               } else if (i < currentIdx) {
                 cls = c.result === 'found' ? 'found' : 'done';
               } else if (i === currentIdx) {

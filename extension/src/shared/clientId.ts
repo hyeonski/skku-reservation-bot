@@ -11,7 +11,6 @@ let cached: string | null = null;
 let pending: Promise<string> | null = null;
 
 export async function getOrCreateClientId(): Promise<string> {
-  if (cached) return cached;
   if (pending) return pending;
 
   pending = (async () => {
@@ -20,6 +19,11 @@ export async function getOrCreateClientId(): Promise<string> {
     if (typeof fromStorage === 'string' && fromStorage.length > 0) {
       cached = fromStorage;
       return fromStorage;
+    }
+
+    if (cached) {
+      await chrome.storage.local.set({ [STORAGE_KEY]: cached });
+      return cached;
     }
 
     // Chrome's crypto.randomUUID() returns RFC 4122 v4 UUID.

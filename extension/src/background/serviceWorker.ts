@@ -332,7 +332,6 @@ async function syncConversationSummaryFromContext(
 }
 
 async function refreshConversationIndexFromServer(): Promise<ConversationSessionSummary[]> {
-  const localIndex = await loadConversationIndex();
   const remoteRows = await apiClient.listConversations();
   const remoteIndex = remoteRows
     .map((row) => buildSummaryFromServer(row))
@@ -348,7 +347,7 @@ async function refreshConversationIndexFromServer(): Promise<ConversationSession
       }),
     )
     .map((ctx) => buildSummaryFromContext(ctx));
-  const merged = mergeConversationSessionSummaries(localIndex, remoteIndex, contextIndex);
+  const merged = mergeConversationSessionSummaries(remoteIndex, contextIndex);
   await saveConversationIndex(merged);
   return merged;
 }
@@ -667,10 +666,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // ---------- message router ----------
 
 chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
-  // Distinguish popup-origin vs content-origin by sender.tab presence.
-  const fromTab = sender.tab !== undefined;
+  // Extension pages can be opened in a tab during development/tests, so a tab
+  // sender is only treated as content-origin when it comes from the GLS hosts.
+  const senderUrl = sender.url ?? sender.tab?.url ?? '';
+  const fromContentTab =
+    sender.tab !== undefined &&
+    (senderUrl.startsWith('https://kingoinfo.skku.edu/') ||
+      senderUrl.startsWith('https://login.skku.edu/'));
 
-  if (fromTab) {
+  if (fromContentTab) {
     // Content → background messages. In this design, the coordinator awaits
     // tab responses via chrome.tabs.sendMessage's promise (the content script
     // replies via sendResponse), so unsolicited content-pushed messages are
@@ -741,9 +745,16 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       void (async () => {
         await rehydrationReady;
         await resumePendingStartIfReady(msg.conversationId);
-        const ctx =
-          contexts.get(msg.conversationId) ??
-          (await hydrateContextFromServer(msg.conversationId));
+        const localCtx = contexts.get(msg.conversationId) ?? null;
+        let ctx = localCtx;
+        if (!localCtx || localCtx.history.length === 0 || !localCtx.applicationState) {
+          try {
+            ctx = (await hydrateContextFromServer(msg.conversationId)) ?? localCtx;
+          } catch (error) {
+            if (!localCtx) throw error;
+            console.warn('[SW] hydrate conversation failed; using local context:', error);
+          }
+        }
         const queue = gls.getQueue(msg.conversationId);
         const restoredStatus =
           ctx?.conversationStatus === 'completed'
@@ -842,9 +853,8 @@ async function handleChatRequest(
   const parsedDraftCommand = parseModification(msg.latestMessage);
   if (
     previousDraft &&
-    (result.intent === 'modify_slot' ||
-      result.intent === 'modify_application' ||
-      parsedDraftCommand.intent === 'edit')
+    parsedDraftCommand.intent === 'edit' &&
+    !hasCompleteReservationForm(result.application_state.draft)
   ) {
     const modified =
       applyDraftModification(previousDraft, parsedDraftCommand) ??

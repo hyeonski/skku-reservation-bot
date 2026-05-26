@@ -431,6 +431,30 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
+  // fetch candidates first. If the DB has no possible spaces, we can show the
+  // retry path without forcing a GLS login.
+  let candidates: SpaceCandidate[];
+  let preserveCandidateOrder = false;
+  if (args.candidates !== undefined) {
+    candidates = args.candidates;
+    preserveCandidateOrder = true;
+  } else {
+    try {
+      candidates = await apiClient.listSpaces({
+        headcount: slots.headcount,
+        ...pickSearchFilters(slots),
+      });
+    } catch (e) {
+      onStatusChange({ kind: 'error', message: `후보 조회 실패: ${(e as Error).message}` });
+      return;
+    }
+  }
+
+  if (candidates.length === 0) {
+    onStatusChange({ kind: 'no_candidate', log: [] });
+    return;
+  }
+
   onStatusChange({ kind: 'opening_gls' });
 
   let tab: chrome.tabs.Tab;
@@ -465,29 +489,6 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   }
   if (!session.loggedIn) {
     onStatusChange({ kind: 'login_required', reason: 'needed' });
-    return;
-  }
-
-  // fetch candidates (사전 주입 후보가 있으면 우선 사용)
-  let candidates: SpaceCandidate[];
-  let preserveCandidateOrder = false;
-  if (args.candidates && args.candidates.length > 0) {
-    candidates = args.candidates;
-    preserveCandidateOrder = true;
-  } else {
-    try {
-      candidates = await apiClient.listSpaces({
-        headcount: slots.headcount,
-        ...pickSearchFilters(slots),
-      });
-    } catch (e) {
-      onStatusChange({ kind: 'error', message: `후보 조회 실패: ${(e as Error).message}` });
-      return;
-    }
-  }
-
-  if (candidates.length === 0) {
-    onStatusChange({ kind: 'no_candidate', log: [] });
     return;
   }
 

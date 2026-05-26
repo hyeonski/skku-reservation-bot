@@ -110,6 +110,16 @@ function emptyState(conversationId: string): ConversationState {
   };
 }
 
+function loginPromptFromStatus(
+  status: AutomationStatus,
+): ConversationState['loginPrompt'] {
+  if (status.kind !== 'login_required') return null;
+  return {
+    variant: status.reason === 'expired' ? 'expired' : 'needed',
+    loggingIn: false,
+  };
+}
+
 function freshConversationId(): string {
   // crypto.randomUUID 는 사이드패널 컨텍스트에서도 사용 가능 (Chrome 110+).
   return crypto.randomUUID();
@@ -135,6 +145,14 @@ function makeAssistantMessage(content: string): UiMessage {
   };
 }
 
+function humanizeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/failed to fetch|load failed|networkerror/i.test(message)) {
+    return '서버에 연결할 수 없습니다. 로컬 서버가 실행 중인지 확인해 주세요.';
+  }
+  return message;
+}
+
 export function useConversation() {
   const [state, setState] = useState<ConversationState>(() =>
     emptyState(freshConversationId()),
@@ -157,9 +175,7 @@ export function useConversation() {
             const next: Partial<ConversationState> = { automationStatus: msg.status };
             if (msg.status.kind === 'error') next.lastError = msg.status.message;
             if (msg.status.kind === 'done') next.submitStep = 'saved';
-            if (msg.status.kind !== 'login_required') {
-              next.loginPrompt = null;
-            }
+            next.loginPrompt = loginPromptFromStatus(msg.status);
             return { ...s, ...next };
           });
           break;
@@ -327,12 +343,12 @@ export function useConversation() {
       };
       res = await sendRuntime(req);
     } catch (e) {
-      setState((s) => ({ ...s, parsing: false, lastError: (e as Error).message }));
+      setState((s) => ({ ...s, parsing: false, lastError: humanizeError(e) }));
       return;
     }
 
     if ('error' in res) {
-      setState((s) => ({ ...s, parsing: false, lastError: res.error as string }));
+      setState((s) => ({ ...s, parsing: false, lastError: humanizeError(res.error) }));
       return;
     }
 
@@ -366,7 +382,10 @@ export function useConversation() {
       return;
     }
 
-    if (parsed.ready_to_search) {
+    const isUpdatingApplication =
+      !!previousState.proposedCandidate && parsed.intent === 'modify_application';
+
+    if (parsed.ready_to_search && !isUpdatingApplication) {
       // 곧바로 background 에 검색 시작 요청. 결과는 BG_STATUS_UPDATE /
       // BG_SEARCH_STARTED / BG_CANDIDATE_RESULT 로 스트리밍.
       const startMsg: PopupStartSearch = {
@@ -405,6 +424,33 @@ export function useConversation() {
       await sendRuntime(msg);
     } catch (e) {
       setState((s) => ({ ...s, submitStep: null, lastError: (e as Error).message }));
+    }
+  }, []);
+
+  const restartSearch = useCallback(async () => {
+    const { conversationId, slots } = stateRef.current;
+    if (!slots?.date || !slots.start_time || (!slots.end_time && slots.duration_min == null) || slots.headcount == null) {
+      setState((s) => ({ ...s, lastError: '공간을 다시 확인할 예약 조건이 부족합니다.' }));
+      return;
+    }
+    const msg: PopupStartSearch = {
+      type: 'POPUP_START_SEARCH',
+      conversationId,
+      slots,
+    };
+    setState((s) => ({
+      ...s,
+      automationStatus: { kind: 'opening_gls' },
+      candidates: [],
+      candidateResults: new Map(),
+      currentIdx: 0,
+      proposedCandidate: null,
+      lastError: null,
+    }));
+    try {
+      await sendRuntime(msg);
+    } catch (e) {
+      setState((s) => ({ ...s, lastError: humanizeError(e) }));
     }
   }, []);
 
@@ -505,9 +551,11 @@ export function useConversation() {
       history?: ChatMessage[];
       lastProposed?: SpaceCandidate | null;
       applicationState?: ApplicationState | null;
+      conversationStatus?: 'active' | 'completed' | 'abandoned_user' | 'abandoned_timeout';
       error?: string;
     }>(msg);
     if (res.error) throw new Error(res.error);
+    const restoredStatus = res.status ?? { kind: 'idle' as const };
 
     const restored: ConversationState = {
       ...emptyState(conversationId),
@@ -520,8 +568,13 @@ export function useConversation() {
       })),
       slots: res.lastFilledSlots ?? null,
       applicationState: res.applicationState ?? null,
-      automationStatus: res.status ?? { kind: 'idle' },
+      automationStatus: restoredStatus,
       proposedCandidate: res.lastProposed ?? null,
+      loginPrompt: loginPromptFromStatus(restoredStatus),
+      submitStep:
+        restoredStatus.kind === 'done' || res.conversationStatus === 'completed'
+          ? 'saved'
+          : null,
     };
     stateRef.current = restored;
     setState(restored);
@@ -549,6 +602,7 @@ export function useConversation() {
     state,
     sendMessage,
     confirmReservation,
+    restartSearch,
     findAlternative,
     openLoginTab,
     applySuggestedMemory,
