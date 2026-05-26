@@ -63,6 +63,14 @@ export const ReservationFormData = z.object({
 });
 export type ReservationFormData = z.infer<typeof ReservationFormData>;
 
+const ApplicationDraftData = z.object({
+  hangsaGbCode: z.string(),
+  organization: z.string(),
+  eventName: z.string(),
+  headcount: z.number().int().positive(),
+  purpose: z.string(),
+});
+
 export const SuggestedApplicationMemory = z.object({
   conversationId: z.string().uuid(),
   label: z.string(),
@@ -86,7 +94,7 @@ export const ApplicationRecommendation = z.object({
 export type ApplicationRecommendation = z.infer<typeof ApplicationRecommendation>;
 
 export const ApplicationState = z.object({
-  draft: ReservationFormData.nullable(),
+  draft: ApplicationDraftData.nullable(),
   missing_application: z.array(ApplicationField),
   needs_application_collection: z.boolean(),
   suggested_memory: SuggestedApplicationMemory.nullable(),

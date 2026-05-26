@@ -217,17 +217,40 @@ function classifyHangsa(
 
 function extractOrganization(text: string): string | null {
   const normalized = normalizeWhitespace(text);
-  const match = normalized.match(
-    /(.+(?:학생회|동아리|총학생회|위원회|연구실|랩|센터|본부|행정실|학과|학부|전공|팀))/,
-  );
-  return match?.[1] ? normalizeWhitespace(match[1]) : null;
+  const suffixPriority = [
+    '총학생회',
+    '학생회',
+    '동아리',
+    '위원회',
+    '연구실',
+    '행정실',
+    '센터',
+    '본부',
+    '팀',
+    '학과',
+    '학부',
+    '전공',
+    '랩',
+  ];
+
+  for (const suffix of suffixPriority) {
+    const index = normalized.indexOf(suffix);
+    if (index < 0) continue;
+    return normalizeWhitespace(normalized.slice(0, index + suffix.length));
+  }
+
+  return null;
 }
 
 function extractExplicitField(
   text: string,
   label: string,
 ): string | null {
-  const match = text.match(new RegExp(`${label}(?:만|은|는)?\\s*[:：]?\\s*(.+)$`));
+  const nextField =
+    '(?:주관단체|단체|행사명|사용목적|목적|행사구분)(?:만|은|는)?\\s*[:：]?';
+  const match = text.match(
+    new RegExp(`${label}(?:만|은|는)?\\s*[:：]?\\s*(.+?)(?=\\s*${nextField}|$)`),
+  );
   if (!match?.[1]) return null;
   return cleanSentenceEnding(match[1]);
 }
@@ -388,6 +411,12 @@ function extractTokens(text: string): string[] {
         '다음',
         '오후',
         '오전',
+        '지난번',
+        '지난번처럼',
+        '저번',
+        '저번처럼',
+        '예전',
+        '예전처럼',
       ].includes(token),
     );
 }
@@ -403,6 +432,12 @@ function pickSuggestedMemory(
   memories: ConversationMemoryCandidate[],
 ): SuggestedApplicationMemory | null {
   if (memories.length === 0) return null;
+
+  // An explicit "지난번처럼 ..." request should beat aggregate frequency.
+  // Otherwise a user's dominant recurring pattern can override a clearly named
+  // but less frequent prior reservation.
+  const reuseSuggestion = pickReuseSignalMemory(text, memories);
+  if (reuseSuggestion) return reuseSuggestion;
 
   // Path 1: frequency-based — same (organization, eventName) combo ≥ FREQUENCY_THRESHOLD
   const groups = new Map<string, ConversationMemoryCandidate[]>();
@@ -443,7 +478,13 @@ function pickSuggestedMemory(
     };
   }
 
-  // Path 2: reuse-signal fallback — "지난번처럼" etc.
+  return null;
+}
+
+function pickReuseSignalMemory(
+  text: string,
+  memories: ConversationMemoryCandidate[],
+): SuggestedApplicationMemory | null {
   if (!hasReuseSignal(text)) return null;
 
   const tokens = extractTokens(text);
@@ -461,6 +502,7 @@ function pickSuggestedMemory(
   }
 
   if (!best) return null;
+  if (tokens.length > 0 && best.score <= 40) return null;
 
   return {
     conversationId: best.memory.conversationId,

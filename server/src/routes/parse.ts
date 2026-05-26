@@ -24,6 +24,7 @@ import {
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
+import { applyDeterministicSlotCorrections } from '../application/slotCorrections.js';
 
 const ErrorResponse = z.object({
   error: z.string(),
@@ -85,6 +86,19 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
 
       const latestUserMessage =
         [...body.history].reverse().find((message) => message.role === 'user')?.content ?? '';
+      const slotCorrection = applyDeterministicSlotCorrections(
+        latestUserMessage,
+        llmResult.filled_slots,
+        llmResult.intent,
+      );
+      llmResult = {
+        ...llmResult,
+        filled_slots: slotCorrection.filledSlots,
+        missing_required: slotCorrection.missingRequired,
+        intent: slotCorrection.intent,
+        ready_to_search: slotCorrection.readyToSearch,
+        assistant_message: slotCorrection.assistantMessage ?? llmResult.assistant_message,
+      };
 
       const memories = await app.prisma.conversation.findMany({
         where: {
