@@ -1,0 +1,9 @@
+{$API_MAIN_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy api-main:8000
+}
+
+{$API_STAGING_DOMAIN} {
+  encode zstd gzip
+  reverse_proxy api-staging:8000
+}

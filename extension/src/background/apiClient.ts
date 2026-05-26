@@ -17,7 +17,10 @@ import type {
 } from '../shared/types';
 import { getOrCreateClientId } from '../shared/clientId';
 
-export const SERVER_BASE_URL = 'http://localhost:8000';
+export const SERVER_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000').replace(
+  /\/+$/,
+  '',
+);
 
 export interface ParseArgs {
   conversationId: string;
@@ -103,7 +106,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/failed to fetch|load failed|networkerror/i.test(message)) {
-      throw new Error('서버에 연결할 수 없습니다. 로컬 서버가 실행 중인지 확인해 주세요.');
+      throw new Error('API 서버에 연결할 수 없습니다. 네트워크 또는 서버 상태를 확인해 주세요.');
     }
     throw error;
   }

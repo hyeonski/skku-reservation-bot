@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b --noEmit && vite build",
+    "build:main": "tsc -b --noEmit && vite build --mode main",
+    "build:staging": "tsc -b --noEmit && vite build --mode staging",
     "preview": "vite preview"
   },
   "dependencies": {

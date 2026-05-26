@@ -1,0 +1,75 @@
+services:
+  api-main:
+    image: ${API_MAIN_IMAGE:-skkubot-api:main}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_ENV: main
+      PORT: 8000
+      DATABASE_URL: ${DATABASE_URL_MAIN}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-20000}
+    expose:
+      - "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  api-staging:
+    image: ${API_STAGING_IMAGE:-skkubot-api:staging}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      APP_ENV: staging
+      PORT: 8000
+      DATABASE_URL: ${DATABASE_URL_STAGING}
+      LLM_API_KEY: ${LLM_API_KEY}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-20000}
+    expose:
+      - "8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:8000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      api-main:
+        condition: service_healthy
+      api-staging:
+        condition: service_healthy
+    environment:
+      API_MAIN_DOMAIN: ${API_MAIN_DOMAIN:-api.skkubot.xyz}
+      API_STAGING_DOMAIN: ${API_STAGING_DOMAIN:-staging-api.skkubot.xyz}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:
