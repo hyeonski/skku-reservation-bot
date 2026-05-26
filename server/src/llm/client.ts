@@ -65,6 +65,8 @@ function getClient(): OpenAI {
   cachedClient = new OpenAI({
     apiKey: config.llm.apiKey,
     baseURL: config.llm.baseUrl,
+    timeout: config.llm.timeoutMs,
+    maxRetries: 0,
   });
   return cachedClient;
 }

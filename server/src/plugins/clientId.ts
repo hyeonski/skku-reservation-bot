@@ -11,6 +11,7 @@
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import fp from 'fastify-plugin';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 
 declare module 'fastify' {
@@ -51,6 +52,17 @@ export const clientIdPlugin = fp(async function clientIdPlugin(app: FastifyInsta
         create: { id },
       });
     } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        await app.prisma.client.update({
+          where: { id },
+          data: { lastSeenAt: new Date() },
+        });
+        req.clientId = id;
+        return;
+      }
       req.log.error({ err }, 'failed to upsert Client');
       reply.code(500).send({ error: 'client upsert failed' });
       return reply;

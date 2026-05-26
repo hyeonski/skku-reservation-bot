@@ -143,7 +143,6 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
         .send({ error: '대화 소유자가 아닙니다 (clientId 불일치)' });
     }
 
-    const now = new Date();
     const isCompleted = body.status === 'completed';
     let generatedTitle: string | null = null;
     if (isCompleted) {
@@ -158,6 +157,7 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
         req.log.warn({ err }, 'conversation title generation failed during completion');
       }
     }
+    const completedAt = isCompleted ? new Date() : null;
 
     // history / lastFilledSlots 는 JSON 컬럼.
     const historyJson = body.history as unknown as Prisma.InputJsonValue;
@@ -209,7 +209,7 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
       ...(body.confirmedSpaceLabel !== undefined
         ? { confirmedSpaceLabel: body.confirmedSpaceLabel }
         : {}),
-      ...(isCompleted ? { completedAt: now } : {}),
+      ...(completedAt ? { completedAt } : {}),
     };
 
     const createData: Prisma.ConversationCreateInput = {
@@ -243,7 +243,7 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
       ...(body.confirmedSpaceLabel !== undefined && body.confirmedSpaceLabel !== null
         ? { confirmedSpaceLabel: body.confirmedSpaceLabel }
         : {}),
-      ...(isCompleted ? { completedAt: now } : {}),
+      ...(completedAt ? { startedAt: completedAt, completedAt } : {}),
     };
 
     const row = await app.prisma.conversation.upsert({

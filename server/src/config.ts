@@ -15,6 +15,11 @@ const envSchema = z.object({
   LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required'),
   LLM_BASE_URL: z.string().url().optional().default('https://api.deepseek.com'),
   LLM_MODEL: z.string().min(1).optional().default('deepseek-chat'),
+  LLM_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 20_000))
+    .pipe(z.number().int().positive()),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 });
 
@@ -35,6 +40,7 @@ export const config = {
     apiKey: env.LLM_API_KEY,
     baseUrl: env.LLM_BASE_URL,
     model: env.LLM_MODEL,
+    timeoutMs: env.LLM_TIMEOUT_MS,
   },
   databaseUrl: env.DATABASE_URL,
 } as const;
