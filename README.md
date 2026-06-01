@@ -6,7 +6,7 @@
 
 학생회·동아리 임원이 매주 반복하는 공간예약 잡무를 줄이는 게 목표입니다. 기존 GLS 시스템을 수정하지 않고 위에 지능형 레이어를 얹는 접근.
 
-현재 코드베이스 기준으로는 **Phase 1 핵심 흐름(채팅 파싱 → 후보 조회 → GLS 가용성 확인 → 채팅 기반 신청 메타 자동채움 → 실제 제출)** 과 **대화 선택/삭제가 가능한 세션형 popup UI**가 구현되어 있습니다.
+현재 코드베이스 기준으로는 **Phase 1 핵심 흐름(채팅 파싱 → 후보 조회 → GLS 가용성 확인 → 채팅 기반 신청 메타 자동채움 → 실제 제출)**, **대화 선택/삭제가 가능한 세션형 side panel UI**, **예약 이력 기반 신청 정보 재사용**, **반복 패턴 기반 리마인더**가 구현되어 있습니다.
 
 상세 배경·로드맵: [docs/PRD.md](docs/PRD.md)
 
@@ -18,7 +18,7 @@
 skku-reservation-bot/
 ├── extension/          크롬 확장 (Vite + @crxjs + React 18, MV3)
 │   ├── manifest.json
-│   ├── src/popup/      채팅 UI
+│   ├── src/sidepanel/  채팅 UI
 │   ├── src/background/ Service Worker + 자동화 오케스트레이터
 │   ├── src/content/    GLS DOM 자동화 (main-world bridge)
 │   └── src/shared/     UUID·메시지 타입
@@ -121,25 +121,25 @@ pnpm build   # dist/ 생성
 
 크롬 → `chrome://extensions` → 개발자 모드 → "압축해제된 확장 프로그램을 로드합니다" → `extension/dist` 선택.
 
-브라우저 액션 아이콘 클릭 → popup 채팅창에서 사용.
+브라우저 액션 아이콘 클릭 → side panel 채팅창에서 사용.
 
-개발 중 popup UI만 빠르게 확인할 때는 아래 명령을 별도로 사용할 수 있습니다.
+개발 중 side panel UI만 빠르게 확인할 때는 아래 명령을 별도로 사용할 수 있습니다.
 
 ```bash
 cd extension
-pnpm dev     # Vite dev server / popup 개발용
+pnpm dev     # Vite dev server / side panel 개발용
 ```
 
 ---
 
 ## Phase 1 동작 흐름
 
-1. 사용자가 popup 채팅창에 자연어로 요청 ("내일 14시부터 2시간 10명")
+1. 사용자가 side panel 채팅창에 자연어로 요청 ("내일 14시부터 2시간 10명")
 2. 서버 `/parse` 가 DeepSeek-Chat으로 탐색 슬롯을 추출하고, 필요하면 `application_state`로 신청 메타 수집 상태도 함께 반환
 3. 누락된 탐색 슬롯이 있으면 멀티턴으로 되묻기
 4. 슬롯 충족 시 `/spaces` 로 후보 공간 조회 (인원·캠퍼스·건물 필터)
 5. 확장이 현재 활성 탭을 GLS로 전환하거나, 이미 활성 GLS 탭이 있으면 재사용하고 content script가 후보 공간을 하나씩 시간표에서 가용성 검증
-6. 가용 공간 발견 → popup 추천 카드에서 공간 요약을 보여주고, 신청 메타가 없으면 채팅으로 한 줄 설명을 받아 초안을 생성
+6. 가용 공간 발견 → side panel 추천 카드에서 공간 요약을 보여주고, 신청 메타가 없으면 채팅으로 한 줄 설명을 받아 초안을 생성
 7. 필요하면 과거 완료 대화의 신청 정보를 "추천만" 하고, 사용자가 수락하거나 새로 설명하면 초안을 확정
 8. 사용자가 카드에서 요약 정보를 검토하고, 수정이 필요하면 채팅으로 "행사명은 ...", "주관단체는 ..."처럼 수정
 9. 확인되면 GLS 신청 폼을 자동 채우고 실제 저장 클릭 → 완료 알림
@@ -174,7 +174,7 @@ pnpm scrape:spaces    # 공간 시딩 (GLS_COOKIE 필요)
 
 ```bash
 cd extension
-pnpm dev      # vite dev (popup HMR)
+pnpm dev      # vite dev (side panel HMR)
 pnpm build    # tsc check + vite build → dist/ (확장 로드용)
 ```
 

@@ -45,7 +45,7 @@
 ## 3. 사용자 플로우
 
 ### 시나리오 A — 일반 예약 (Phase 1)
-1. 확장 아이콘 popup으로 진입
+1. 확장 아이콘 클릭 후 Chrome side panel로 진입
 2. 자연어 입력 ("다음 주 화요일 6시 20명 학생회 회의", "내일 18시부터 20시까지 330112 예약")
 3. 에이전트가 조건 파싱 → 인원 조건 기반 후보 탐색
 4. 사용자 확인 + 행사 메타(행사구분/주관단체/행사명/사용목적) 입력
@@ -74,29 +74,31 @@
 ```
 [서버]
 ├── LLM API 프록시
-├── 사용자 데이터 (예약 이력, 선호, 정기 일정)
-├── 스케줄 트리거/알림
+├── 사용자 데이터 (예약 이력, 신청 정보, 리마인더)
+├── 반복 패턴 기반 리마인더 생성
 
 [크롬 확장]
-├── 팝업 UI (자연어 입출력)
+├── Side panel UI (자연어 입출력)
 ├── Content Script (포털 DOM 조작 / 폼 자동 작성)
 ├── Background SW (서버 알림 수신, 상태 관리)
 ```
 
 - **인증 정보는 서버에 저장 안 함**. 포털 조작은 사용자 브라우저에서, 세션은 로컬에만.
-- 서버는 LLM 프록시 + 데이터 저장 + 스케줄 트리거에 한정.
+- 서버는 LLM 파싱, 대화·신청 이력 mirror, 공간 후보 조회, 반복 패턴 기반 리마인더 생성에 한정.
 
 ### 스택 (현재 구현)
 - LLM: DeepSeek-Chat (`deepseek-chat`, OpenAI 호환 API)
 - 서버: TypeScript + Fastify + Prisma + MySQL
 - 자동화: Chrome Extension API + background service worker + content script + main-world bridge
 - 알림: `chrome.notifications` (예약 완료 시점)
-- 저장: MySQL(`Client`/`Conversation`/`Space`) + `chrome.storage.local/session`
+- 저장: MySQL(`Client`/`Conversation`/`Space`/`Reminder`) + `chrome.storage.local/session`
 
 ### 현재 구현 메모
-- 진입점은 popup 기준이며, 포털 내 플로팅 버튼은 아직 구현되지 않음
+- 진입점은 Chrome side panel 기준이며, 포털 내 플로팅 버튼은 아직 구현되지 않음
 - 후보 공간은 `/spaces`에서 인원 기준으로 추린 뒤 GLS에서 직렬 검증
-- 개인화/정기예약/반려 감지 플로우는 아직 구현 범위 밖
+- 과거 완료 대화의 신청 정보를 추천·재사용하는 개인화 일부가 구현됨
+- 같은 요일·시간·단체·행사 패턴이 반복되면 다음 예약을 제안하는 리마인더 일부가 구현됨
+- 반려 감지·재신청과 사용자 확인 없는 자동 반복 실행은 아직 구현 범위 밖
 
 ### 주요 챌린지
 - **P1**: DOM 자동화 안정성 (드롭다운/달력), 세션 감지, LLM 파싱 정확도(자연어→폼 선택지 매핑), 외부 예약 시스템 구조 통합, race condition
