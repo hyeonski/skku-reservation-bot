@@ -55,7 +55,7 @@ const isLoggedIn = !location.href.startsWith('https://login.skku');
 const isGlsActive = typeof nexacro !== 'undefined' && !!nexacro.getApplication();
 ```
 
-**자동 로그인은 하지 않는다** (D-009). 사용자에게 "로그인이 필요합니다" 안내만.
+**자동 로그인은 하지 않는다**. 사용자에게 "로그인이 필요합니다" 안내만.
 
 ---
 
@@ -198,7 +198,7 @@ await userConfirm(buildPreview(dm));
 dm.parent.parent.btnSave_OnClick();          // form 메서드 직접 호출
 ```
 
-핵심 헬퍼는 `shared/gls/`에 둠 (D-017): `nexClick`, `byIdSuffix`, `activePopupForm`, `selectComboByText`, `readDataset`, `dismissNoticeIfShown` 등.
+핵심 헬퍼는 `shared/gls/`에 둠: `nexClick`, `byIdSuffix`, `activePopupForm`, `selectComboByText`, `readDataset`, `dismissNoticeIfShown` 등.
 
 ---
 
@@ -253,7 +253,7 @@ Nexacro의 백엔드 응답이 그대로 `dsXxx` 데이터셋에 들어가 있�
 
 ### 시딩에 최적 — `dsCboSpace` 전체 컬럼
 
-PoC에서 확인한 `dsCboSpace`의 row 한 줄에는 시딩에 필요한 거의 모든 정보가 들어있다. D-022 `Space` 모델은 이 컬럼들을 그대로 매핑한다.
+PoC에서 확인한 `dsCboSpace`의 row 한 줄에는 시딩에 필요한 거의 모든 정보가 들어있다. `Space` 모델은 이 컬럼들을 그대로 매핑한다.
 
 | 컬럼 | 의미 | 예시 |
 |---|---|---|
@@ -272,6 +272,8 @@ PoC에서 확인한 `dsCboSpace`의 row 한 줄에는 시딩에 필요한 거의
 | `DUP_YN`, `RES_TIME`, `SINCHUNG_FROM_DT`, `SINCHUNG_TO_DT` | 기타 메타 (P1 미사용) | — |
 
 `SPACE_NM` 파싱: `/^\[\d+\]\s*(.+?)\s*\/\s*\d+\s*명\s*~/` → `roomName`. 단 슬래시 다중 케이스(`"첨단e+ 강의실(75명) / 국제화첨단강의실 / 10 명 ~ 75 명"`)에 주의 — 첫 슬래시 이전만.
+
+사용자 입력·표시 관점에서는 `BUILD_NO`와 `GU_SPACE_CD`가 모두 중요하다. 성균관대에서는 공간을 건물번호·공간코드·호실 번호처럼 숫자로 부르는 일이 많으므로, "330112 예약해줘" 같은 입력은 공간명 검색보다 `GU_SPACE_CD` exact match를 먼저 시도한다. 응답에는 `제2공학관(26동) XXX강의실(26312)`처럼 건물명 옆 건물번호/동, 공간명 옆 공간코드를 함께 보여줘야 한다. 한 건물이 여러 동으로 나뉘는 경우가 있어 숫자는 보조 라벨이 아니라 오인식 방지용 식별자다.
 
 ### 가능 여부 판정 — `dsGrdSub` (§10 결론)
 
@@ -324,7 +326,7 @@ P1 자동화에서는 **저장 직전까지 set_value로 데이터 커밋 + 실�
 | 모달 닫기 | ✅ | 우상단 X 좌표 클릭 |
 | 실제 저장 | ⛔ 의도적으로 안 함 | `btnSave_OnClick()` 한 줄로 가능 |
 
-**결론**: 전략 A로 Phase 1 자동화 스크립트 작성에 **구조적 장애물이 전혀 없음**. 추가로 발견한 Nexacro 컴포넌트 API/데이터셋 접근은 DOM 셀렉터 기반 자동화보다 훨씬 안정적이라, 사실상 **"Nexacro 컴포넌트 path를 모은 사전"이 D-017의 `selectors.ts`를 대체**해야 함.
+**결론**: 전략 A로 Phase 1 자동화 스크립트 작성에 **구조적 장애물이 전혀 없음**. 추가로 발견한 Nexacro 컴포넌트 API/데이터셋 접근은 DOM 셀렉터 기반 자동화보다 훨씬 안정적이라, 사실상 **Nexacro 컴포넌트 path를 모은 사전**을 자동화의 기준으로 삼아야 함.
 
 ---
 
@@ -421,7 +423,7 @@ const activePopup = popups[popups.length - 1];
 
 ---
 
-## 11. 시딩 스크립트 설계 (D-015 최종)
+## 11. 시딩 스크립트 설계
 
 `server/scripts/scrape-spaces.ts` 의사코드:
 
@@ -437,8 +439,8 @@ const activePopup = popups[popups.length - 1];
 //       - cboBuildCd 콤보 DOM 클릭으로 변경 (cascade 트리거 → dsCboSpace 자동 로드)
 //       - 짧은 대기 (1.5s)
 //       - dsCboSpace 전체 dump
-//       - 각 row를 D-022 Space 모델 컬럼에 매핑하여 Prisma upsert
-//         (컬럼 매핑은 D-022 본문 참조 — 코드·이름·정원범위·USE_JOJIK·CONTENTS·LIMIT 모두 1:1)
+//       - 각 row를 Space 모델 컬럼에 매핑하여 Prisma upsert
+//         (코드·이름·정원범위·USE_JOJIK·CONTENTS·LIMIT 모두 1:1)
 // 6. 멱등 — glsSpaceCode 가 unique key
 ```
 

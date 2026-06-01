@@ -33,16 +33,16 @@ skku-reservation-bot/
 ├── shared/gls/         확장·서버가 함께 import (tsconfig paths @gls/*)
 │   ├── nexacroPaths.ts    GLS Nexacro 컴포넌트 id 사전 (M-코드 등)
 │   └── schemas.ts         Nexacro 데이터셋 row 타입 + toNumber 헬퍼
-│   # 자동화 함수 본체는 실행 환경 격리로 공유 불가 (D-017 개정 참조).
+│   # 자동화 함수 본체는 실행 환경 격리로 공유 불가.
 │   # bridgeMainWorld.ts / scrape-spaces.ts 가 각자 인라인 유지.
 │
 └── docs/
     ├── PRD.md           통합 PRD 요약
-    ├── DECISIONS.md     D-001~D-028 의사결정 로그
+    ├── E2E_TEST_CASES.md 사용자 관점 E2E 테스트 케이스
     └── GLS_DOM_NOTES.md GLS Nexacro 자동화 PoC 결과
 ```
 
-기술 스택 선택 이유는 [docs/DECISIONS.md](docs/DECISIONS.md)에 항목별로 정리되어 있습니다.
+제품 범위는 [docs/PRD.md](docs/PRD.md), GLS 자동화 세부는 [docs/GLS_DOM_NOTES.md](docs/GLS_DOM_NOTES.md), 사용자 관점 검증 항목은 [docs/E2E_TEST_CASES.md](docs/E2E_TEST_CASES.md)에 정리되어 있습니다.
 
 ---
 
@@ -86,7 +86,7 @@ cd server
 pnpm prisma migrate dev
 ```
 
-`Client`, `Conversation`, `Space` 테이블이 생성됩니다 (D-022, D-023).
+`Client`, `Conversation`, `Space` 테이블이 생성됩니다.
 
 ### 4. 공간 메타데이터 시딩
 
@@ -101,7 +101,7 @@ GLS_COOKIE="JSESSIONID=...; ticket=..." pnpm scrape:spaces
 GLS_COOKIE="..." HEADLESS=1 pnpm scrape:spaces
 ```
 
-자동화 정책상 자격증명은 서버에 저장하지 않습니다 (D-009). 시딩은 개발자가 1회성으로 돌리고, 학기마다 수동 재실행 (D-015 sub-3).
+자동화 정책상 자격증명은 서버에 저장하지 않습니다. 시딩은 개발자가 1회성으로 돌리고, 학기마다 수동 재실행합니다.
 
 ### 5. 서버 실행
 
@@ -136,7 +136,7 @@ pnpm dev     # Vite dev server / popup 개발용
 
 1. 사용자가 popup 채팅창에 자연어로 요청 ("내일 14시부터 2시간 10명")
 2. 서버 `/parse` 가 DeepSeek-Chat으로 탐색 슬롯을 추출하고, 필요하면 `application_state`로 신청 메타 수집 상태도 함께 반환
-3. 누락된 탐색 슬롯이 있으면 멀티턴으로 되묻기 (D-013)
+3. 누락된 탐색 슬롯이 있으면 멀티턴으로 되묻기
 4. 슬롯 충족 시 `/spaces` 로 후보 공간 조회 (인원·캠퍼스·건물 필터)
 5. 확장이 현재 활성 탭을 GLS로 전환하거나, 이미 활성 GLS 탭이 있으면 재사용하고 content script가 후보 공간을 하나씩 시간표에서 가용성 검증
 6. 가용 공간 발견 → popup 추천 카드에서 공간 요약을 보여주고, 신청 메타가 없으면 채팅으로 한 줄 설명을 받아 초안을 생성
@@ -144,18 +144,15 @@ pnpm dev     # Vite dev server / popup 개발용
 8. 사용자가 카드에서 요약 정보를 검토하고, 수정이 필요하면 채팅으로 "행사명은 ...", "주관단체는 ..."처럼 수정
 9. 확인되면 GLS 신청 폼을 자동 채우고 실제 저장 클릭 → 완료 알림
 
-자세한 메시지 흐름은 [docs/DECISIONS.md](docs/DECISIONS.md) D-026 참조.
-
 ---
 
-## P1 범위 / 비범위
+## 구현 범위 / 비범위
 
-**포함**: 멀티턴 슬롯필링, 인원 조건 기반 후보 조회, GLS 자동 신청서 작성·제출
+**포함**: 멀티턴 슬롯필링, 인원 조건 기반 후보 조회, GLS 자동 신청서 작성·제출, 예약 이력 기반 재사용, 정기 예약 리마인드 알림
 
-**제외 (Phase 2 이후)**:
-- 반려 감지·재신청 (D-011)
-- 개인화 선호 학습 (Phase 2)
-- 정기 예약 알림·자동 실행 (Phase 3·4)
+**제외**:
+- 반려 감지·재신청
+- 사용자 확인 없는 자동 반복 실행 (Phase 4)
 - 도서관·열람실 등 다른 시스템 (Phase 5)
 
 ---
@@ -204,10 +201,6 @@ cd extension && pnpm exec tsc --noEmit
 | 가용성 판정 | `dsGrdSub` (공간 row 클릭으로 로드) |
 | 공간 시딩 | 개발자 쿠키 주입 + Playwright 1회성 실행 |
 | 후보 순회 | 현재 구현은 서버 후보를 1회 셔플한 뒤 직렬 검증 (데모 편의상) |
-
-전체 결정 로그: [docs/DECISIONS.md](docs/DECISIONS.md) (D-001~D-028)
-
----
 
 ## 라이브 검증 시 다듬을 부분
 
