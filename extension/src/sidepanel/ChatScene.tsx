@@ -129,6 +129,21 @@ function adaptSlots(slots: import('../shared/types').FilledSlots | null): Recomm
   };
 }
 
+function hasCompleteRecommendationSlots(
+  slots: import('../shared/types').FilledSlots | null,
+): boolean {
+  if (!slots) return false;
+  const end =
+    slots.end_time ||
+    (slots.start_time && slots.duration_min != null ? adaptSlots(slots).end : '');
+  return Boolean(
+    slots.date &&
+      slots.start_time &&
+      end &&
+      slots.headcount != null,
+  );
+}
+
 function draftToFields(
   draft: import('../shared/types').ReservationFormData | null,
 ): DraftFields {
@@ -178,6 +193,9 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
   const recommendation = state.applicationState?.recommendation ?? null;
   const suggestedMemory = state.applicationState?.suggested_memory ?? null;
   const draftFields = useMemo(() => draftToFields(draft), [draft]);
+  const applicationComplete =
+    fieldsAreComplete(draftFields) &&
+    state.applicationState?.needs_application_collection === false;
   const draftFlags = useMemo(
     () => suggestedFlags(state.applicationState),
     [state.applicationState],
@@ -196,15 +214,17 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     state.automationStatus.kind === 'done';
   const foundCurrent = state.automationStatus.kind === 'candidate_found';
 
-  const showRecommendation = !!proposed;
+  const activeRecommendationValid = !!proposed && hasCompleteRecommendationSlots(state.slots);
+  const showRecommendation = activeRecommendationValid;
   const showDraft =
-    !!proposed &&
-    fieldsAreComplete(draftFields) &&
+    activeRecommendationValid &&
+    applicationComplete &&
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
   const showCompletedDraft =
-    fieldsAreComplete(draftFields) &&
+    applicationComplete &&
     (state.submitStep === 'saved' || state.automationStatus.kind === 'done');
+  const currentDraftActive = activeRecommendationValid || showCompletedDraft;
   const showP2 =
     view.phase === 'meta-p2' && !!suggestedMemory;
   const showLogin = !!state.loginPrompt;
@@ -425,21 +445,24 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
           />
         )}
 
-        {draftSnapshots.map((snapshot) => (
-          <DraftCard
-            key={snapshot.id}
-            draft={snapshot.draft}
-            suggested={snapshot.suggested}
-            superseded={snapshot.superseded}
-            submitting={!snapshot.superseded && (submitStep === 'filling' || submitStep === 'saving')}
-            submitLocked={
-              !snapshot.superseded &&
-              (submitStep === 'saved' || state.automationStatus.kind === 'done')
-            }
-            onSubmit={onSubmitDraft}
-            onEdit={onEditDraft}
-          />
-        ))}
+        {draftSnapshots.map((snapshot) => {
+          const superseded = snapshot.superseded || !currentDraftActive;
+          return (
+            <DraftCard
+              key={snapshot.id}
+              draft={snapshot.draft}
+              suggested={snapshot.suggested}
+              superseded={superseded}
+              submitting={!superseded && (submitStep === 'filling' || submitStep === 'saving')}
+              submitLocked={
+                superseded ||
+                (submitStep === 'saved' || state.automationStatus.kind === 'done')
+              }
+              onSubmit={onSubmitDraft}
+              onEdit={onEditDraft}
+            />
+          );
+        })}
 
         {submitStep && (
           <SubmitProgressCard step={submitStep} />

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { MouseEvent } from 'react';
 import { Icon } from '../icons';
 import type { SessionSummary } from '../types';
@@ -12,30 +12,61 @@ interface SessionItemProps {
 
 export function SessionItem({ session, onPick, onDelete }: SessionItemProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const whenLabel = session.when ?? (session.updatedAt ? formatRelativeTime(session.updatedAt) : '');
 
   const statusCls = `status-pill ${session.status}`;
 
+  const clearDeleteConfirmTimer = () => {
+    if (deleteConfirmTimer.current) {
+      clearTimeout(deleteConfirmTimer.current);
+      deleteConfirmTimer.current = null;
+    }
+  };
+
+  const confirmDeletion = () => {
+    clearDeleteConfirmTimer();
+    onDelete?.(session.id);
+  };
+
+  const handlePick = () => {
+    if (confirmDelete) {
+      confirmDeletion();
+      return;
+    }
+    onPick(session);
+  };
+
   const handleDelete = (e: MouseEvent) => {
     e.stopPropagation();
     if (confirmDelete) {
-      onDelete?.(session.id);
+      confirmDeletion();
       return;
     }
     setConfirmDelete(true);
-    setTimeout(() => setConfirmDelete(false), 1500);
+    clearDeleteConfirmTimer();
+    deleteConfirmTimer.current = setTimeout(() => {
+      setConfirmDelete(false);
+      deleteConfirmTimer.current = null;
+    }, 5000);
   };
+
+  useEffect(() => {
+    return () => {
+      clearDeleteConfirmTimer();
+    };
+  }, []);
 
   return (
     <div
       className="session-item"
       role="button"
       tabIndex={0}
-      onClick={() => onPick(session)}
+      onClick={handlePick}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onPick(session);
+          handlePick();
         }
       }}
     >

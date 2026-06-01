@@ -89,6 +89,14 @@ function makeInvalidInputResult(message: string, missingRequired: string[] = [])
   };
 }
 
+function clearTimeSlots(slots: FilledSlotsType | null | undefined): FilledSlotsType {
+  return {
+    ...(slots ?? makeEmptySlots()),
+    start_time: null,
+    end_time: null,
+  };
+}
+
 function hasImpossibleHeadcount(text: string): boolean {
   const match = text.replace(/,/g, '').match(/(^|[^\d])(-?\d+)\s*명/);
   if (!match?.[2]) return false;
@@ -219,6 +227,34 @@ function applyStudentCouncilBuildingDisambiguation(
   };
 }
 
+function hasExplicitStudentCenterCampus(text: string): boolean {
+  return /(율전|자과캠|자연과학캠퍼스|자연과학\s*캠퍼스|명륜|인사캠|인문사회과학캠퍼스|인문사회\s*캠퍼스)/.test(
+    text,
+  );
+}
+
+function applyStudentCenterCampusClarification(
+  result: LLMParseResult,
+  text: string,
+): LLMParseResult {
+  const building = result.filled_slots.building?.trim();
+  if (building !== '학생회관') return result;
+  if (!/학생\s*회관/.test(text)) return result;
+  if (hasExplicitStudentCenterCampus(text)) return result;
+
+  return {
+    ...result,
+    filled_slots: {
+      ...result.filled_slots,
+      campus: null,
+    },
+    missing_required: Array.from(new Set([...result.missing_required, 'campus'])),
+    ready_to_search: false,
+    assistant_message:
+      '학생회관은 캠퍼스가 헷갈릴 수 있어요. 명륜 학생회관인지, 율전/자과캠 학생회관인지 알려주세요.',
+  };
+}
+
 function crossesMidnight(slots: FilledSlotsType): boolean {
   const startMinutes = timeToMinutes(slots.start_time);
   const endMinutes = timeToMinutes(slots.end_time);
@@ -257,6 +293,21 @@ function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {
     'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
     ['start_time', 'end_time'],
   );
+}
+
+function applyAmbiguousMeridiemSlotOverride(
+  result: LLMParseResult,
+  text: string,
+): LLMParseResult {
+  if (!hasAmbiguousBareMeridiemTime(text)) return result;
+  return {
+    ...result,
+    filled_slots: clearTimeSlots(result.filled_slots),
+    missing_required: Array.from(new Set([...result.missing_required, 'start_time'])),
+    ready_to_search: false,
+    assistant_message:
+      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
+  };
 }
 
 function makeImpossibleInputResult(text: string): LLMParseResult | null {
@@ -393,9 +444,11 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
 
 export const __parseRouteTestables = {
   applyInlineSlotEdits,
+  applyAmbiguousMeridiemSlotOverride,
   applyFutureBookingWindowOverride,
   applyImpossibleSlotOverride,
   applySameDayTimeOverride,
+  applyStudentCenterCampusClarification,
   applyStudentCouncilBuildingDisambiguation,
   applyTimeGranularityOverride,
   hasAmbiguousBareMeridiemTime,
@@ -462,6 +515,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         try {
           llmResult = await parseWithLLM({ history: body.history, now: body.now });
           llmResult = applyStudentCouncilBuildingDisambiguation(llmResult, latestUserMessage);
+          llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
           llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
           llmResult = applySameDayTimeOverride(llmResult);
@@ -490,6 +544,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         llmResult = applySameDayTimeOverride(llmResult);
         llmResult = applyTimeGranularityOverride(llmResult);
       }
+      llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
 
       const memories = await app.prisma.conversation.findMany({
         where: {

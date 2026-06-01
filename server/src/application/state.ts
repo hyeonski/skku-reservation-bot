@@ -44,6 +44,8 @@ const RECENT_MEMORY_WINDOW = 4;
 const REUSE_SIGNAL_CONFIDENCE = 0.72;
 const FREQUENCY_BASE_CONFIDENCE = 0.75;
 const FREQUENCY_CONFIDENCE_STEP = 0.05;
+const MAX_EVENT_NAME_LENGTH = 50;
+const MAX_PURPOSE_LENGTH = 500;
 
 const APPLICATION_COLLECTOR_PROMPT =
   '신청서에는 어떤 단체의 어떤 행사로 넣을까요? 예: 소프트웨어학과 학생회 정기회의';
@@ -78,6 +80,13 @@ interface DraftUpdateResult {
   confidence: Record<ApplicationField, ConfidenceLevel>;
   source: ApplicationState['source'];
   touchedFields: Set<ApplicationField>;
+}
+
+interface ApplicationLengthIssue {
+  field: Extract<ApplicationField, 'eventName' | 'purpose'>;
+  label: string;
+  max: number;
+  actual: number;
 }
 
 function cloneConfidence(
@@ -153,9 +162,25 @@ function isLikelyApplicationDescription(text: string, history: ChatMessage[]): b
   if (previousAssistant.includes(APPLICATION_COLLECTOR_PROMPT)) return true;
   if (containsScheduleSignal(normalized)) return false;
   if (/(회의실|강의실|공간|예약|잡아줘|잡아\b)/.test(normalized)) return false;
-  return /(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터)/.test(
+  return /(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학회|학과|학부|전공|연구실|랩|행사|활동|모임|워크숍|특강|시험|총학생회|본부|센터|팀)/.test(
     normalized,
   );
+}
+
+function isApplicationCollectionFollowUp(text: string, previousState: ApplicationState): boolean {
+  const normalized = normalizeWhitespace(text);
+  if (!previousState.needs_application_collection) return false;
+  if (normalized.length < 2) return false;
+  if (isAffirmative(normalized) || isNegative(normalized)) return false;
+  if (containsScheduleSignal(normalized)) return false;
+  if (
+    /(회의실|강의실|공간|예약|신청|잡아줘|잡아\b|찾아줘|찾아\s*줘|빌려줘|빌려\s*줘|비어|빈\s*시간|가능|다른\s*공간|취소|중단)/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function stripScheduleAndReservationWords(text: string): string {
@@ -426,6 +451,31 @@ function computeMissingApplication(
   return missing;
 }
 
+function findApplicationLengthIssue(
+  draft: ReservationFormData | null,
+): ApplicationLengthIssue | null {
+  if (!draft) return null;
+  const eventNameLength = normalizeWhitespace(draft.eventName).length;
+  if (eventNameLength > MAX_EVENT_NAME_LENGTH) {
+    return {
+      field: 'eventName',
+      label: '행사명',
+      max: MAX_EVENT_NAME_LENGTH,
+      actual: eventNameLength,
+    };
+  }
+  const purposeLength = normalizeWhitespace(draft.purpose).length;
+  if (purposeLength > MAX_PURPOSE_LENGTH) {
+    return {
+      field: 'purpose',
+      label: '사용목적',
+      max: MAX_PURPOSE_LENGTH,
+      actual: purposeLength,
+    };
+  }
+  return null;
+}
+
 function extractTokens(text: string): string[] {
   return normalizeWhitespace(text)
     .replace(/[^\p{Script=Hangul}\p{Letter}\p{Number}\s]/gu, ' ')
@@ -668,7 +718,10 @@ export function buildApplicationState(
       source = hangsaOnly.source;
       nextIntent = 'modify_application';
       assistantMessage = '행사구분을 반영했어요. 아래 카드에서 확인해 주세요.';
-    } else if (isLikelyApplicationDescription(latestUser, args.history)) {
+    } else if (
+      isLikelyApplicationDescription(latestUser, args.history) ||
+      isApplicationCollectionFollowUp(latestUser, previousState)
+    ) {
       const derived = deriveDraftFromDescription(latestUser, args.filledSlots, draft);
       if (derived) {
         draft = derived.draft;
@@ -701,10 +754,16 @@ export function buildApplicationState(
     }
   }
 
+  const lengthIssue = findApplicationLengthIssue(draft);
   const missing = computeMissingApplication(draft, confidence);
+  if (lengthIssue && !missing.includes(lengthIssue.field)) {
+    missing.unshift(lengthIssue.field);
+  }
   const needsCollection = missing.length > 0;
 
-  if (needsCollection && draft && missing.length === 1 && missing[0] === 'hangsaGbCode') {
+  if (lengthIssue) {
+    assistantMessage = `${lengthIssue.label}이 너무 길어요. 현재 ${lengthIssue.actual}자라서 GLS 저장 전에 실패할 수 있어요. ${lengthIssue.max}자 이내로 줄여서 다시 알려주세요.`;
+  } else if (needsCollection && draft && missing.length === 1 && missing[0] === 'hangsaGbCode') {
     assistantMessage =
       '이 일정은 학생회/동아리 행사에 더 가깝나요, 학과 주관 행사에 더 가깝나요?';
   } else if (!draft && !suggestedMemory && nextIntent === 'modify_application') {

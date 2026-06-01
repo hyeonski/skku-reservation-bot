@@ -9,6 +9,7 @@ export type DraftCommand =
   | { intent: 'submit' }
   | { intent: 'cancel' }
   | { intent: 'alternative' }
+  | { intent: 'availability_window_unsupported' }
   | { intent: 'edit'; edits: DraftEdit[] }
   | { intent: 'unknown' };
 
@@ -48,6 +49,20 @@ function isStandaloneAlternativeCommand(text: string): boolean {
   );
 }
 
+function asksForSpecificRoomAvailabilityWindow(text: string): boolean {
+  const normalized = text.trim();
+  if (
+    !/(언제|몇\s*시|빈\s*(?:시간|날짜|때)|가능한\s*(?:시간|날짜|때)|비어|비는|남는|가용)/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return /(?:그|이|해당|원하는)\s*(?:방|공간|곳)|빈\s*시간|언제\s*비어/.test(
+    normalized,
+  );
+}
+
 export function parseModification(text: string): DraftCommand {
   const t = text.trim();
   if (/^(제출|예약|신청|보내|진행)/.test(t)) return { intent: 'submit' };
@@ -55,6 +70,9 @@ export function parseModification(text: string): DraftCommand {
     /^(?:이제\s*)?(?:아니(?:요)?[,，]?\s*)?(?:그만(?:할래|할게요?|하자|해|요)?|취소(?:할래|해줘|해주세요|할게요?|하자|요)?|중단(?:할래|해줘|해주세요|할게요?|요)?|중지(?:할래|해줘|해주세요|할게요?|요)?|안\s*할래요?)\s*[.!?。]*$/.test(t)
   ) {
     return { intent: 'cancel' };
+  }
+  if (asksForSpecificRoomAvailabilityWindow(t)) {
+    return { intent: 'availability_window_unsupported' };
   }
   if (isStandaloneAlternativeCommand(t)) {
     return { intent: 'alternative' };

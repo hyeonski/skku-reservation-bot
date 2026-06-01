@@ -106,9 +106,16 @@ function derivePhase(s: ConversationState): ChatPhase {
   }
   if (auto === 'no_candidate') return 'failed-retry';
   if (auto === 'candidate_found') {
-    // 후보 확정 — applicationState.draft 가 완성됐으면 draft, 아니면 meta-collect.
+    // 후보 확정 — 서버가 신청서 수집을 완료했다고 판단한 경우에만 저장 검토로 넘어간다.
     const draft = s.applicationState?.draft;
-    if (draft && draft.organization && draft.eventName && draft.purpose && draft.hangsaGbCode) {
+    if (
+      draft &&
+      !s.applicationState?.needs_application_collection &&
+      draft.organization &&
+      draft.eventName &&
+      draft.purpose &&
+      draft.hangsaGbCode
+    ) {
       return 'draft';
     }
     // P2 메모리 추천이 있고 사용자가 아직 수락/거절 안 한 상태면 meta-p2.

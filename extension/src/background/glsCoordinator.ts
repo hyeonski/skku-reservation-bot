@@ -987,14 +987,14 @@ export interface SubmitConfirmedArgs {
   emitBroadcast?: (msg: CoordinatorBroadcast) => void;
 }
 
-export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Promise<void> {
+export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Promise<boolean> {
   const { conversationId, candidate, formData, onStatusChange } = args;
   const emitBroadcast = args.emitBroadcast ?? (() => {});
   const state = queues.get(conversationId);
   const tabId = state?.tabId ?? (await findOrCreateGlsTab()).id;
   if (tabId === undefined) {
     onStatusChange({ kind: 'error', message: 'GLS 탭 ID 확보 실패' });
-    return;
+    return false;
   }
 
   onStatusChange({ kind: 'submitting' });
@@ -1013,7 +1013,7 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
     });
   } catch (e) {
     onStatusChange({ kind: 'error', message: `제출 직전 빈 공간 재확인 실패: ${(e as Error).message}` });
-    return;
+    return false;
   }
   if (!latestAvailability.available) {
     const reason = summarizeConflicts(latestAvailability.conflicts);
@@ -1021,7 +1021,7 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
       kind: 'error',
       message: `제출 직전에 다시 확인했더니 이 공간은 더 이상 비어 있지 않아요. (${reason}) 다른 공간이나 시간을 선택해 주세요.`,
     });
-    return;
+    return false;
   }
 
   // 사이드패널의 SubmitProgressCard 가 진행바를 그릴 수 있도록 단계별 emit.
@@ -1047,13 +1047,13 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
   } catch (e) {
     clearTimeout(savingTimer);
     onStatusChange({ kind: 'error', message: `제출 메시지 실패: ${(e as Error).message}` });
-    return;
+    return false;
   }
   clearTimeout(savingTimer);
 
   if (!result.ok) {
     onStatusChange({ kind: 'error', message: result.error ?? '제출 실패' });
-    return;
+    return false;
   }
 
   emitBroadcast({ type: 'BG_SUBMIT_STATUS', conversationId, step: 'saved' });
@@ -1071,4 +1071,5 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
   }
   queues.delete(conversationId);
   void persistQueues();
+  return true;
 }

@@ -122,6 +122,11 @@ function makeExclusionConflict(info: string): Array<{ kind: string; timeTerm: st
   return [{ kind: '제외', timeTerm: '', info }];
 }
 
+interface BlockingScheduleText {
+  source: string;
+  text: string;
+}
+
 async function chooseComboInteractionFirst(
   suffix: string,
   label: string,
@@ -302,6 +307,8 @@ export async function checkAvailability(
   console.log('[GLS-iso] step: read dsGrdSub');
   const schedule = await runInPage<SpaceScheduleRow[]>('readDsGrdSub');
   const conflicts = computeConflicts(schedule, yyyymmdd, startHour, endHour);
+  const blockingTexts = await runInPage<BlockingScheduleText[]>('readBlockingScheduleTexts');
+  conflicts.push(...computeBlockingTextConflicts(blockingTexts, yyyymmdd, startHour, endHour));
   console.log('[GLS-iso] checkAvailability done — conflicts:', conflicts.length);
 
   // Preview: formData 가 미리 제공된 경우 폼 전체를
@@ -335,6 +342,36 @@ function parseTimeTerm(term: string): [number, number] | null {
     parseInt(m[1]!, 10) * 60 + parseInt(m[2]!, 10),
     parseInt(m[3]!, 10) * 60 + parseInt(m[4]!, 10),
   ];
+}
+
+function parseCompactDateFromSlash(
+  year: string,
+  month: string,
+  day: string,
+): string {
+  return `${year}${month}${day}`;
+}
+
+function parseDateRangeFromText(text: string): [string, string] | null {
+  const m = String(text ?? '').match(
+    /(\d{4})[./-](\d{1,2})[./-](\d{1,2})\s*~\s*(\d{4})[./-](\d{1,2})[./-](\d{1,2})/,
+  );
+  if (!m) return null;
+  const start = parseCompactDateFromSlash(
+    m[1]!,
+    m[2]!.padStart(2, '0'),
+    m[3]!.padStart(2, '0'),
+  );
+  const end = parseCompactDateFromSlash(
+    m[4]!,
+    m[5]!.padStart(2, '0'),
+    m[6]!.padStart(2, '0'),
+  );
+  return [start, end];
+}
+
+function parseFirstTimeRangeFromText(text: string): [number, number] | null {
+  return parseTimeTerm(text);
 }
 
 function isCompactDate(value: string | null | undefined): value is string {
@@ -396,6 +433,43 @@ function computeConflicts(
       });
     }
   }
+  return conflicts;
+}
+
+function computeBlockingTextConflicts(
+  entries: BlockingScheduleText[],
+  date: string,
+  startHour: number,
+  endHour: number,
+): Array<{ kind: string; timeTerm: string; info: string }> {
+  const wantS = startHour * 60;
+  const wantE = endHour * 60;
+  const conflicts: Array<{ kind: string; timeTerm: string; info: string }> = [];
+  const seen = new Set<string>();
+
+  for (const entry of entries) {
+    const text = String(entry.text ?? '').replace(/\s+/g, ' ').trim();
+    if (!/(대여불가|예약불가|신청불가|점검|장애)/.test(text)) continue;
+
+    const dateRange = parseDateRangeFromText(text);
+    if (dateRange && (date < dateRange[0] || date > dateRange[1])) continue;
+
+    const timeRange = parseFirstTimeRangeFromText(text);
+    if (timeRange && !(timeRange[0] < wantE && timeRange[1] > wantS)) continue;
+    if (!dateRange && !timeRange) continue;
+
+    const key = `${entry.source}:${dateRange?.join('-') ?? 'any'}:${timeRange?.join('-') ?? 'all'}:${text}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    conflicts.push({
+      kind: text.includes('점검') || text.includes('장애') ? 'GLS 안내' : '대여불가',
+      timeTerm: timeRange
+        ? `${String(Math.floor(timeRange[0] / 60)).padStart(2, '0')}:${String(timeRange[0] % 60).padStart(2, '0')}~${String(Math.floor(timeRange[1] / 60)).padStart(2, '0')}:${String(timeRange[1] % 60).padStart(2, '0')}`
+        : '',
+      info: text,
+    });
+  }
+
   return conflicts;
 }
 

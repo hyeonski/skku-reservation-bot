@@ -39,6 +39,10 @@ function digitsOnly(value: string): string {
   return String(value ?? '').replace(/\D/g, '');
 }
 
+function hasContactValue(snapshot: Record<string, string>): boolean {
+  return digitsOnly(snapshot.contact ?? snapshot.contactRendered ?? '').length > 0;
+}
+
 async function chooseComboInteractionFirst(
   suffix: string,
   label: string,
@@ -298,5 +302,8 @@ export async function fillForm(args: FillArgs): Promise<void> {
   }
   if (String(snapshot.blockingAlert ?? '').trim()) {
     throw new Error(`form snapshot blocked by alert: ${snapshot.blockingAlert}`);
+  }
+  if (!hasContactValue(snapshot)) {
+    throw new Error('GLS 기본 연락처가 비어 있어요. GLS에서 연락처를 먼저 입력한 뒤 다시 시도해 주세요.');
   }
 }

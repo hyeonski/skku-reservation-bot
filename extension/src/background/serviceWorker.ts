@@ -44,6 +44,11 @@ import {
   mergeConversationSessionSummaries,
   shouldAppearInConversationHistory,
 } from '../shared/conversationSessions';
+import {
+  applicationLengthIssueMessage,
+  findApplicationLengthIssue,
+  hasRepeatReservationCondition,
+} from './chatSafety';
 
 interface PendingStartRequest {
   conversationId: string;
@@ -188,6 +193,14 @@ function emptyFilledSlots(): FilledSlots {
   };
 }
 
+function clearTimeSlots(slots: FilledSlots | null | undefined): FilledSlots {
+  return {
+    ...(slots ?? emptyFilledSlots()),
+    start_time: null,
+    end_time: null,
+  };
+}
+
 function hasAnyFilledSlot(slots: FilledSlots | null | undefined): boolean {
   if (!slots) return false;
   return Boolean(
@@ -254,10 +267,6 @@ function hasUnsupportedFacilityCondition(text: string): boolean {
   );
 }
 
-function hasRepeatReservationCondition(text: string): boolean {
-  return /매주|매달|매월|매일|격주|반복|정기적으로|이번\s*달.*(?:매주|매일)/.test(text);
-}
-
 function asksToChangeSubmittedReservation(text: string): boolean {
   if (!/(예약|신청)/.test(text)) return false;
   if (!/(취소|변경|수정)/.test(text)) return false;
@@ -266,6 +275,18 @@ function asksToChangeSubmittedReservation(text: string): boolean {
 
 function asksForCandidateList(text: string): boolean {
   return /(여러\s*개|후보.*(?:목록|리스트|비교)|비교해서|같이\s*보여)/.test(text);
+}
+
+function asksForSpecificRoomAvailabilityWindow(text: string): boolean {
+  const normalized = text.trim();
+  if (!/(언제|몇\s*시|빈\s*(?:시간|날짜|때)|가능한\s*(?:시간|날짜|때)|비어|비는|남는|가용)/.test(normalized)) {
+    return false;
+  }
+  return /(?:그|이|해당|원하는)\s*(?:방|공간|곳)|빈\s*시간|언제\s*비어/.test(normalized);
+}
+
+function unsupportedAvailabilityWindowMessage(): string {
+  return '특정 공간의 빈 시간대를 자동으로 훑어 제안하는 기능은 아직 지원하지 않아요. 원하는 날짜와 시간을 하나 정해서 다시 요청해 주세요. 지금 조건으로 다른 공간을 찾고 싶다면 "다른 공간"이라고 알려주세요.';
 }
 
 function applyChatSafetyOverride(
@@ -319,7 +340,40 @@ function applyChatSafetyOverride(
     };
   }
 
+  if (asksForSpecificRoomAvailabilityWindow(latestMessage)) {
+    return {
+      ...result,
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message: unsupportedAvailabilityWindowMessage(),
+      application_state: previousApplicationState ?? result.application_state,
+    };
+  }
+
   return result;
+}
+
+function applyApplicationLengthGuard(result: ParseResult): ParseResult {
+  const issue = findApplicationLengthIssue(result.application_state.draft);
+  if (!issue) return result;
+
+  return {
+    ...result,
+    intent: 'modify_application',
+    ready_to_search: false,
+    assistant_message: applicationLengthIssueMessage(issue),
+    application_state: {
+      ...result.application_state,
+      missing_application: Array.from(new Set([
+        issue.field,
+        ...result.application_state.missing_application,
+      ])),
+      needs_application_collection: true,
+      suggested_memory: null,
+      recommendation: null,
+      source: result.application_state.source ?? 'user_modified',
+    },
+  };
 }
 
 function formatHour(h: number): string {
@@ -962,10 +1016,10 @@ function applyAmbiguousMeridiemOverride(
   if (!hasAmbiguousBareMeridiemTime(text)) return result;
   return {
     ...result,
-    intent: 'new_reservation',
+    intent: result.intent,
     ready_to_search: false,
-    missing_required: ['start_time'],
-    filled_slots: emptyFilledSlots(),
+    missing_required: Array.from(new Set([...result.missing_required, 'start_time'])),
+    filled_slots: clearTimeSlots(result.filled_slots),
     assistant_message:
       '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
     application_state: previousApplicationState ?? result.application_state,
@@ -1500,6 +1554,44 @@ async function handleChatRequest(
     return { type: 'BG_CHAT_RESPONSE', result };
   }
 
+  if (parsedDraftCommand.intent === 'availability_window_unsupported') {
+    const result: ParseResult = {
+      conversation_id: msg.conversationId,
+      filled_slots: previousSlots ?? emptyFilledSlots(),
+      missing_required: [],
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message: unsupportedAvailabilityWindowMessage(),
+      application_state: ctx.applicationState ?? emptyApplicationState(),
+    };
+
+    ctx.updatedAt = new Date().toISOString();
+    ctx.lastIntent = result.intent;
+    ctx.lastFilledSlots = result.filled_slots;
+    ctx.applicationState = result.application_state;
+
+    const assistantMessageTs = new Date().toISOString();
+    const historyWithAssistant: import('../shared/types').ChatMessage[] = [
+      ...msg.history,
+      { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
+    ];
+    ctx.history = historyWithAssistant;
+    void persistContexts();
+    void syncConversationSummaryFromContext(ctx);
+    void mirrorConversation(msg.conversationId, {
+      history: historyWithAssistant,
+      status: ctx.conversationStatus,
+      lastIntent: result.intent,
+      lastFilledSlots: result.filled_slots,
+      lastApplicationState: result.application_state,
+      confirmedReservationLabel: ctx.confirmedReservationLabel,
+      confirmedSpaceCode: ctx.confirmedSpaceCode,
+      confirmedSpaceLabel: ctx.confirmedSpaceLabel,
+    }, '[SW] availabilityWindowUnsupported mirror failed:');
+
+    return { type: 'BG_CHAT_RESPONSE', result };
+  }
+
   if (parsedDraftCommand.intent === 'alternative') {
     const result: ParseResult = {
       conversation_id: msg.conversationId,
@@ -1662,6 +1754,8 @@ async function handleChatRequest(
       };
     }
   }
+
+  result = applyApplicationLengthGuard(result);
 
   ctx.conversationStatus = 'active';
   ctx.confirmedReservationLabel = null;
@@ -1840,7 +1934,8 @@ async function handleConfirm(
       onStatusChange: emit,
       emitBroadcast: broadcastToSidepanel,
     })
-    .then(async () => {
+    .then(async (completed) => {
+      if (!completed) return;
       // Mark conversation completed on server (mirror).
       const ctx = contexts.get(msg.conversationId);
       if (ctx) {

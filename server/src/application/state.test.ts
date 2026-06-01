@@ -232,6 +232,58 @@ test('buildApplicationState accepts seminar follow-up as organization and event 
   assert.equal(result.applicationState.needs_application_collection, false);
 });
 
+test('buildApplicationState keeps asking when collection follow-up has ambiguous event type', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'assistant',
+        content: '단체와 행사명을 알려주세요',
+      },
+      {
+        role: 'user',
+        content: '기능검증팀 E2E 애매한 모임',
+      },
+    ],
+    latestUserMessage: '기능검증팀 E2E 애매한 모임',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: {
+      ...baseSlots,
+      headcount: 12,
+    },
+    readyToSearch: false,
+    previousState: {
+      draft: {
+        hangsaGbCode: '117',
+        organization: '',
+        eventName: 'E2E 애매한 모임',
+        headcount: 12,
+        purpose: 'E2E 애매한 모임 진행',
+      },
+      missing_application: ['organization', 'hangsaGbCode'],
+      needs_application_collection: true,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'low',
+        eventName: 'medium',
+        purpose: 'medium',
+        hangsaGbCode: 'low',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.organization, '기능검증팀');
+  assert.equal(result.applicationState.draft?.eventName, '기능검증팀 E2E 애매한 모임');
+  assert.equal(result.applicationState.draft?.hangsaGbCode, '117');
+  assert.deepEqual(result.applicationState.missing_application, ['hangsaGbCode']);
+  assert.equal(result.applicationState.needs_application_collection, true);
+  assert.match(result.assistantMessage, /학생회\/동아리 행사|학과 주관 행사/);
+});
+
 test('buildApplicationState applies explicit eventName modification on existing draft', () => {
   const result = buildApplicationState({
     history: [
@@ -270,6 +322,45 @@ test('buildApplicationState applies explicit eventName modification on existing 
   assert.equal(result.applicationState.draft?.eventName, '운영위원회 회의');
   assert.equal(result.applicationState.draft?.purpose, '운영위원회 회의 진행');
   assert.equal(result.applicationState.source, 'user_modified');
+});
+
+test('buildApplicationState asks to shorten overlong event names before draft completion', () => {
+  const result = buildApplicationState({
+    history: [
+      { role: 'assistant', content: '단체와 행사명을 알려주세요' },
+      {
+        role: 'user',
+        content:
+          '주관단체는 기능검증팀, 행사명은 E2E 길이 제한 테스트 회의 초과길이 초과길이 초과길이 초과길이 초과길이 초과길이 초과길이로 해줘',
+      },
+    ],
+    latestUserMessage:
+      '주관단체는 기능검증팀, 행사명은 E2E 길이 제한 테스트 회의 초과길이 초과길이 초과길이 초과길이 초과길이 초과길이 초과길이로 해줘',
+    baseIntent: 'modify_application',
+    baseAssistantMessage: '단체와 행사명을 알려주세요',
+    filledSlots: baseSlots,
+    readyToSearch: false,
+    previousState: {
+      draft: null,
+      missing_application: ['organization', 'eventName', 'purpose', 'hangsaGbCode'],
+      needs_application_collection: true,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'low',
+        eventName: 'low',
+        purpose: 'low',
+        hangsaGbCode: 'low',
+      },
+      source: null,
+    },
+    memories: [],
+  });
+
+  assert.equal(result.applicationState.needs_application_collection, true);
+  assert.equal(result.applicationState.missing_application.includes('eventName'), true);
+  assert.match(result.assistantMessage, /행사명이 너무 길어요/);
+  assert.match(result.assistantMessage, /50자 이내/);
 });
 
 test('buildApplicationState bounds multiple explicit field modifications by labels', () => {

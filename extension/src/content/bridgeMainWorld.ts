@@ -62,6 +62,7 @@ declare global {
     cboResStTime: { label: '예약시간', occurrence: 0 },
     cboResEdTime: { label: '예약시간', occurrence: 1 },
     TextArea00: { label: '사용목적' },
+    contact: { label: '연락처' },
   };
 
   function popupDomPrefix(): string {
@@ -432,6 +433,8 @@ declare global {
       headcountRendered: visibleRenderedValueForSuffix('edtUseNum'),
       purpose: visibleRenderedValueForSuffix('TextArea00'),
       purposeRendered: visibleRenderedValueForSuffix('TextArea00'),
+      contact: visibleRenderedValueForSuffix('contact'),
+      contactRendered: visibleRenderedValueForSuffix('contact'),
       blockingAlert: readBlockingAlertText(),
     };
   }
@@ -1471,6 +1474,71 @@ declare global {
       return readDataset(activePopupForm(), 'dsGrdSub');
     },
 
+    /**
+     * GLS가 공간별 dsGrdSub 외에 하단 예약현황/공지 그리드로 표시하는
+     * 전체 대여불가 기간을 수집한다. 예: 국가고시 기간 09:00~22:00.
+     */
+    readBlockingScheduleTexts: (): Array<{ source: string; text: string }> => {
+      const form = activePopupForm();
+      const entries: Array<{ source: string; text: string }> = [];
+
+      for (const key of Object.keys(form)) {
+        const maybeDs = form[key];
+        if (
+          !maybeDs ||
+          typeof maybeDs !== 'object' ||
+          typeof maybeDs.getRowCount !== 'function' ||
+          typeof maybeDs.getColCount !== 'function'
+        ) {
+          continue;
+        }
+        let rows: Record<string, unknown>[] = [];
+        try {
+          rows = readDataset(form, key);
+        } catch {
+          continue;
+        }
+        for (const row of rows) {
+          const text = Object.values(row)
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .join(' ');
+          if (/대여불가|예약불가|신청불가|점검|장애/.test(text)) {
+            entries.push({ source: `dataset:${key}`, text });
+          }
+        }
+      }
+
+      const popupPrefixValue = popupPrefix();
+      const seen = new Set(entries.map((entry) => entry.text));
+      for (const el of Array.from(document.querySelectorAll<HTMLElement>('div, span, p'))) {
+        if (!isVisible(el)) continue;
+        let cur: HTMLElement | null = el;
+        let inPopup = false;
+        while (cur) {
+          if (cur.id?.startsWith(popupPrefixValue)) {
+            inPopup = true;
+            break;
+          }
+          cur = cur.parentElement;
+        }
+        if (!inPopup) continue;
+        const text = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (
+          text.length < 8 ||
+          text.length > 800 ||
+          seen.has(text) ||
+          !/대여불가|예약불가|신청불가|점검|장애/.test(text)
+        ) {
+          continue;
+        }
+        seen.add(text);
+        entries.push({ source: 'visible', text });
+      }
+
+      return entries;
+    },
+
     /** visible 저장 버튼 클릭 — 실제 사용자 경로 우선. */
     clickSaveButton: (): true => {
       const save = byPopupSuffix('btnSave');
@@ -1627,6 +1695,8 @@ declare global {
           headcountRendered: renderedValueForSuffix('edtUseNum'),
           purpose: String(dm.TextArea00?.value ?? ''),
           purposeRendered: renderedValueForSuffix('TextArea00'),
+          contact: renderedValueForSuffix('contact'),
+          contactRendered: renderedValueForSuffix('contact'),
           blockingAlert: readBlockingAlertText(),
         };
       } catch (_) {

@@ -170,7 +170,10 @@ export function useConversation() {
           if (msg.conversationId !== stateRef.current.conversationId) return;
           setState((s) => {
             const next: Partial<ConversationState> = { automationStatus: msg.status };
-            if (msg.status.kind === 'error') next.lastError = msg.status.message;
+            if (msg.status.kind === 'error') {
+              next.lastError = msg.status.message;
+              next.submitStep = null;
+            }
             if (msg.status.kind === 'done') next.submitStep = 'saved';
             if (msg.status.kind !== 'login_required') {
               next.loginPrompt = null;

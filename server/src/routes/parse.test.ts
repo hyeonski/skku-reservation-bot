@@ -111,6 +111,34 @@ test('bare 12-hour clock is rejected before LLM parsing', () => {
   assert.match(result?.assistant_message ?? '', /오전\/오후/);
 });
 
+test('ambiguous time correction keeps reusable non-time slots', () => {
+  const result = __parseRouteTestables.applyAmbiguousMeridiemSlotOverride(
+    {
+      filled_slots: {
+        ...baseSlots,
+        date: '2026-06-24',
+        start_time: '07:00',
+        end_time: '08:00',
+        duration_min: 60,
+        headcount: 30,
+      },
+      missing_required: [],
+      intent: 'modify_slot',
+      ready_to_search: true,
+      assistant_message: '조건을 수정했어요.',
+    },
+    '아니, 30명으로 7시에 다시 찾아줘',
+  );
+
+  assert.equal(result.ready_to_search, false);
+  assert.equal(result.filled_slots.date, '2026-06-24');
+  assert.equal(result.filled_slots.headcount, 30);
+  assert.equal(result.filled_slots.start_time, null);
+  assert.equal(result.filled_slots.end_time, null);
+  assert.equal(result.filled_slots.duration_min, 60);
+  assert.equal(result.missing_required.includes('start_time'), true);
+});
+
 test('explicit meridiem and contextual early clock are not rejected before LLM parsing', () => {
   assert.equal(
     __parseRouteTestables.makeImpossibleInputResult(
@@ -150,8 +178,8 @@ test('student council organization wording is not narrowed to student center bui
   assert.equal(result.filled_slots.building, null);
 });
 
-test('explicit student center building wording is preserved', () => {
-  const result = __parseRouteTestables.applyStudentCouncilBuildingDisambiguation(
+test('student center building without campus asks for clarification', () => {
+  const result = __parseRouteTestables.applyStudentCenterCampusClarification(
     {
       filled_slots: {
         date: '2026-06-22',
@@ -172,6 +200,40 @@ test('explicit student center building wording is preserved', () => {
   );
 
   assert.equal(result.filled_slots.building, '학생회관');
+  assert.equal(result.filled_slots.campus, null);
+  assert.equal(result.ready_to_search, false);
+  assert.equal(result.missing_required.includes('campus'), true);
+  assert.match(result.assistant_message, /명륜|율전|자과캠/);
+});
+
+test('student center building with explicit campus is preserved', () => {
+  const result = __parseRouteTestables.applyStudentCouncilBuildingDisambiguation(
+    {
+      filled_slots: {
+        date: '2026-06-22',
+        start_time: '18:00',
+        end_time: '20:00',
+        duration_min: 120,
+        headcount: 12,
+        campus: null,
+        building: '학생회관',
+        space: null,
+      },
+      missing_required: [],
+      intent: 'new_reservation',
+      ready_to_search: true,
+      assistant_message: '공간을 찾아볼게요.',
+    },
+    '6월 22일 18시부터 2시간 12명 자과캠 학생회관 연습실 E2E 테스트',
+  );
+
+  const clarified = __parseRouteTestables.applyStudentCenterCampusClarification(
+    result,
+    '6월 22일 18시부터 2시간 12명 자과캠 학생회관 연습실 E2E 테스트',
+  );
+
+  assert.equal(clarified.filled_slots.building, '학생회관');
+  assert.equal(clarified.ready_to_search, true);
 });
 
 test('past parsed slots are not allowed to continue reservation flow', () => {
