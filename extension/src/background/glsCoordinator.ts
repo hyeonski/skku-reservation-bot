@@ -147,10 +147,19 @@ async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
       if (activeTab.url?.startsWith(GLS_URL)) {
         return activeTab;
       }
-      const updated = await chrome.tabs.update(activeTab.id, { url: GLS_URL, active: true });
-      return updated;
     }
-    return chrome.tabs.create({ url: GLS_URL, active: true });
+
+    const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
+    const reusable =
+      existingTabs.find(
+        (tab) => tab.id !== undefined && tab.windowId === activeTab?.windowId,
+      ) ??
+      existingTabs.find((tab) => tab.id !== undefined);
+    if (reusable?.id !== undefined) {
+      return reusable;
+    }
+
+    return chrome.tabs.create({ url: GLS_URL, active: false });
   }
   // 새 탭은 background 로 (active:false) 열어 popup 이 닫히지 않도록 한다.
   // popup 은 새 탭이 활성화되면 자동 dismiss 되기 때문. 자동화는 비활성 탭에서도
@@ -989,6 +998,32 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
   }
 
   onStatusChange({ kind: 'submitting' });
+  let latestAvailability: ContentAvailabilityResult;
+  try {
+    await ensureAutomationReady(tabId);
+    latestAvailability = await sendToAutomationTab<BgCheckAvailability, ContentAvailabilityResult>(tabId, {
+      type: 'BG_CHECK_AVAILABILITY',
+      candidate,
+      date: args.date,
+      startHour: parseHourFromHHMM(args.startTime),
+      endHour: parseHourFromHHMM(args.endTime),
+      startTime: args.startTime,
+      endTime: args.endTime,
+      strictPreview: true,
+    });
+  } catch (e) {
+    onStatusChange({ kind: 'error', message: `제출 직전 빈 공간 재확인 실패: ${(e as Error).message}` });
+    return;
+  }
+  if (!latestAvailability.available) {
+    const reason = summarizeConflicts(latestAvailability.conflicts);
+    onStatusChange({
+      kind: 'error',
+      message: `제출 직전에 다시 확인했더니 이 공간은 더 이상 비어 있지 않아요. (${reason}) 다른 공간이나 시간을 선택해 주세요.`,
+    });
+    return;
+  }
+
   // 사이드패널의 SubmitProgressCard 가 진행바를 그릴 수 있도록 단계별 emit.
   // content script 는 fill→save 를 atomic 하게 처리하므로 'saving' 은 정확한
   // 경계 없이 0.8 초 후 fake transition. 정확한 신호가 필요해지면 content
@@ -1027,8 +1062,8 @@ export async function submitConfirmedReservation(args: SubmitConfirmedArgs): Pro
     await chrome.notifications.create(`reservation-${conversationId}`, {
       type: 'basic',
       iconUrl: 'icon-128.png',
-      title: '예약 완료',
-      message: `${candidate.buildingName} ${candidate.roomName} (${args.date} ${args.startTime}-${args.endTime}) 예약이 완료되었습니다.`,
+      title: '신청 저장 완료',
+      message: `${candidate.buildingName} ${candidate.roomName} (${args.date} ${args.startTime}-${args.endTime}) 신청이 저장되었습니다. 최종 승인은 GLS에서 확인하세요.`,
       priority: 2,
     });
   } catch {

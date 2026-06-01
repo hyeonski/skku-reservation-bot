@@ -35,14 +35,14 @@ const PHASE_LABEL: Record<ChatPhase, string> = {
   'meta-p2': '신청 메타',
   'meta-collect': '신청 메타',
   draft: '검토',
-  submitting: '제출 중',
-  done: '완료',
+  submitting: '신청 저장 중',
+  done: '신청 저장 완료',
   'failed-retry': '재시도',
   failed: '실패',
 };
 
 const PHASE_PLACEHOLDER: Record<ChatPhase, string> = {
-  starter: '예: 내일 6시 20명 회의실',
+  starter: '예: 내일 오후 6시 20명 회의실',
   'slots-end': '예: 20시까지 / 2시간',
   'slots-count': '몇 명이서 사용하세요?',
   'meta-collect': '단체와 행사명을 알려주세요',
@@ -51,8 +51,8 @@ const PHASE_PLACEHOLDER: Record<ChatPhase, string> = {
   searching: '탐색 중…',
   'awaiting-login': 'GLS 로그인 후 진행됩니다',
   'awaiting-relogin': 'GLS 로그인 후 진행됩니다',
-  submitting: '제출 중…',
-  done: '대화가 종료되었어요',
+  submitting: '신청 저장 중…',
+  done: '신청은 저장됐고 승인은 GLS에서 확인하세요',
   failed: '대화가 종료되었어요',
   recommended: '메시지 입력…',
   'meta-p2': '메시지 입력…',

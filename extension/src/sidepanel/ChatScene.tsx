@@ -202,6 +202,9 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     fieldsAreComplete(draftFields) &&
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
+  const showCompletedDraft =
+    fieldsAreComplete(draftFields) &&
+    (state.submitStep === 'saved' || state.automationStatus.kind === 'done');
   const showP2 =
     view.phase === 'meta-p2' && !!suggestedMemory;
   const showLogin = !!state.loginPrompt;
@@ -281,7 +284,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
   ]);
 
   useEffect(() => {
-    if (!showDraft) return;
+    if (!showDraft && !showCompletedDraft) return;
 
     setDraftSnapshots((prev) => {
       const latest = prev.at(-1);
@@ -303,7 +306,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
         },
       ];
     });
-  }, [showDraft, draftFields, draftFlags]);
+  }, [showDraft, showCompletedDraft, draftFields, draftFlags]);
 
   const onSend = () => {
     const text = composerValue;
@@ -429,6 +432,10 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
             suggested={snapshot.suggested}
             superseded={snapshot.superseded}
             submitting={!snapshot.superseded && (submitStep === 'filling' || submitStep === 'saving')}
+            submitLocked={
+              !snapshot.superseded &&
+              (submitStep === 'saved' || state.automationStatus.kind === 'done')
+            }
             onSubmit={onSubmitDraft}
             onEdit={onEditDraft}
           />

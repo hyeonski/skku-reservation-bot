@@ -554,10 +554,12 @@ export function useConversation() {
       history?: ChatMessage[];
       lastProposed?: SpaceCandidate | null;
       applicationState?: ApplicationState | null;
+      conversationStatus?: import('../../shared/types').ConversationStatus;
       error?: string;
     }>(msg);
     if (res.error) throw new Error(res.error);
 
+    const restoredStatus = res.status ?? { kind: 'idle' as const };
     const restored: ConversationState = {
       ...emptyState(conversationId),
       messages: (res.history ?? []).map((m, index) => ({
@@ -569,8 +571,12 @@ export function useConversation() {
       })),
       slots: res.lastFilledSlots ?? null,
       applicationState: res.applicationState ?? null,
-      automationStatus: res.status ?? { kind: 'idle' },
+      automationStatus: restoredStatus,
       proposedCandidate: res.lastProposed ?? null,
+      submitStep:
+        restoredStatus.kind === 'done' || res.conversationStatus === 'completed'
+          ? 'saved'
+          : null,
     };
     stateRef.current = restored;
     setState(restored);

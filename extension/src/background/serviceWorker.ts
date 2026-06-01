@@ -82,6 +82,8 @@ const pendingStarts = new Map<string, PendingStartRequest>();
 
 const SESSION_KEY = 'sw_contexts_v1';
 const MAX_RESERVATION_DURATION_MIN = 8 * 60;
+const MAX_FUTURE_BOOKING_DAYS = 180;
+const SUPPORTED_TIME_MINUTES = new Set([0, 30]);
 const rehydrationReady = (async () => {
   await rehydrateContexts();
   await gls.waitForQueuesRehydrated();
@@ -332,6 +334,28 @@ function timeToMinutes(time: string | null): number | null {
   const minute = Number.parseInt(match[2] ?? '', 10);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
   return hour * 60 + minute;
+}
+
+function isSupportedReservationMinute(minute: number): boolean {
+  return SUPPORTED_TIME_MINUTES.has(minute);
+}
+
+function hasAmbiguousBareMeridiemTime(text: string): boolean {
+  const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
+  for (const match of matches) {
+    const hour = Number.parseInt(match[1] ?? '', 10);
+    if (!Number.isFinite(hour) || hour < 1 || hour > 12) continue;
+
+    const startIndex = match.index ?? 0;
+    const before = text.slice(Math.max(0, startIndex - 8), startIndex);
+    const segment = `${before}${match[0]}`;
+    if (/(오전|오후|아침|점심|낮|저녁|밤|새벽|정오|자정)/.test(segment)) {
+      continue;
+    }
+
+    return true;
+  }
+  return false;
 }
 
 function minutesToTime(minutes: number): string {
@@ -622,6 +646,28 @@ async function removeConversationIndexEntry(conversationId: string): Promise<Con
   return next;
 }
 
+async function persistConversationSnapshot(ctx: ConversationContext): Promise<void> {
+  try {
+    await chrome.storage.local.set({
+      [`${SNAPSHOT_PREFIX}${ctx.conversationId}`]: {
+        history: ctx.history,
+        lastFilledSlots: ctx.lastFilledSlots,
+        applicationState: ctx.applicationState,
+        conversationStatus: ctx.conversationStatus,
+        lastStatus: ctx.lastStatus,
+        lastProposed: ctx.lastProposed,
+        pendingFormData: ctx.pendingStart?.pendingFormData ?? null,
+        confirmedReservationLabel: ctx.confirmedReservationLabel,
+        confirmedSpaceCode: ctx.confirmedSpaceCode,
+        confirmedSpaceLabel: ctx.confirmedSpaceLabel,
+        updatedAt: ctx.updatedAt,
+      },
+    });
+  } catch {
+    // local snapshot is a resilience aid; never block the live flow.
+  }
+}
+
 function buildSummaryFromContext(ctx: ConversationContext): ConversationSessionSummary {
   return makeConversationSessionSummary({
     id: ctx.conversationId,
@@ -687,8 +733,10 @@ async function syncConversationSummaryFromContext(
       confirmedReservationLabel: ctx.confirmedReservationLabel,
     })
   ) {
+    await removeConversationSnapshot(ctx.conversationId);
     return removeConversationIndexEntry(ctx.conversationId);
   }
+  await persistConversationSnapshot(ctx);
   return syncConversationIndexWithSummary(buildSummaryFromContext(ctx));
 }
 
@@ -720,6 +768,62 @@ async function removeConversationSnapshot(conversationId: string): Promise<void>
   } catch {
     // non-fatal
   }
+}
+
+async function hydrateContextFromSnapshot(
+  conversationId: string,
+): Promise<ConversationContext | null> {
+  try {
+    const got = await chrome.storage.local.get(`${SNAPSHOT_PREFIX}${conversationId}`);
+    const snapshot = got?.[`${SNAPSHOT_PREFIX}${conversationId}`] as
+      | Partial<ConversationContext & { pendingFormData: ReservationFormData | null }>
+      | undefined;
+    if (!snapshot) return null;
+    const ctx = getOrCreateContext(conversationId);
+    ctx.history = Array.isArray(snapshot.history) ? snapshot.history : [];
+    ctx.lastFilledSlots = snapshot.lastFilledSlots ?? null;
+    ctx.applicationState = snapshot.applicationState ?? null;
+    ctx.conversationStatus = snapshot.conversationStatus ?? 'active';
+    ctx.lastStatus = snapshot.lastStatus ?? { kind: 'idle' };
+    ctx.lastProposed = snapshot.lastProposed ?? null;
+    ctx.pendingStart = snapshot.pendingFormData
+      ? {
+          conversationId,
+          slots: ctx.lastFilledSlots ?? emptyFilledSlots(),
+          pendingFormData: snapshot.pendingFormData,
+        }
+      : null;
+    ctx.confirmedReservationLabel = snapshot.confirmedReservationLabel ?? null;
+    ctx.confirmedSpaceCode = snapshot.confirmedSpaceCode ?? null;
+    ctx.confirmedSpaceLabel = snapshot.confirmedSpaceLabel ?? null;
+    ctx.updatedAt = snapshot.updatedAt ?? new Date().toISOString();
+    await persistContexts();
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+async function hydrateContextFromSummary(
+  conversationId: string,
+): Promise<ConversationContext | null> {
+  const summary = (await loadConversationIndex()).find((item) => item.id === conversationId);
+  if (!summary) return null;
+  const ctx = getOrCreateContext(conversationId);
+  ctx.history = summary.lastMessagePreview
+    ? [{ role: 'assistant', content: summary.lastMessagePreview, ts: summary.updatedAt }]
+    : [];
+  ctx.conversationStatus = summary.status;
+  ctx.lastStatus =
+    summary.status === 'completed'
+      ? { kind: 'done', spaceCode: summary.confirmedSpaceCode ?? 'completed' }
+      : { kind: 'idle' };
+  ctx.confirmedReservationLabel = summary.confirmedReservationLabel ?? null;
+  ctx.confirmedSpaceCode = summary.confirmedSpaceCode ?? null;
+  ctx.confirmedSpaceLabel = summary.confirmedSpaceLabel ?? null;
+  ctx.updatedAt = summary.updatedAt;
+  await persistContexts();
+  return ctx;
 }
 
 async function hydrateContextFromServer(
@@ -794,6 +898,80 @@ function normalizeSlotEndTime(slots: FilledSlots): FilledSlots {
   return endTime ? { ...slots, end_time: endTime } : slots;
 }
 
+function crossesMidnight(slots: FilledSlots | null | undefined): boolean {
+  if (!slots) return false;
+  const startMin = timeToMinutes(slots.start_time);
+  const endMin = timeToMinutes(slots.end_time);
+  if (startMin != null && endMin != null && endMin <= startMin) return true;
+  if (startMin != null && slots.duration_min != null) {
+    return startMin + slots.duration_min >= 24 * 60;
+  }
+  return false;
+}
+
+function applySameDayTimeOverride(
+  result: ParseResult,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (!crossesMidnight(result.filled_slots)) return result;
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: ['start_time', 'end_time'],
+    assistant_message:
+      '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
+    application_state: previousApplicationState ?? result.application_state,
+  };
+}
+
+function usesUnsupportedReservationMinute(slots: FilledSlots | null | undefined): boolean {
+  if (!slots) return false;
+  const startMinutes = timeToMinutes(slots.start_time);
+  const endMinutes = timeToMinutes(slots.end_time);
+  if (startMinutes != null && !isSupportedReservationMinute(startMinutes % 60)) return true;
+  if (endMinutes != null && !isSupportedReservationMinute(endMinutes % 60)) return true;
+  if (startMinutes != null && slots.duration_min != null) {
+    return !isSupportedReservationMinute((startMinutes + slots.duration_min) % 60);
+  }
+  return false;
+}
+
+function applyTimeGranularityOverride(
+  result: ParseResult,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (!usesUnsupportedReservationMinute(result.filled_slots)) return result;
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: ['start_time', 'end_time'],
+    filled_slots: emptyFilledSlots(),
+    assistant_message:
+      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+    application_state: previousApplicationState ?? result.application_state,
+  };
+}
+
+function applyAmbiguousMeridiemOverride(
+  result: ParseResult,
+  text: string,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (!hasAmbiguousBareMeridiemTime(text)) return result;
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: ['start_time'],
+    filled_slots: emptyFilledSlots(),
+    assistant_message:
+      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
+    application_state: previousApplicationState ?? result.application_state,
+  };
+}
+
 function getSlotDurationMinutes(slots: FilledSlots | null | undefined): number | null {
   if (!slots) return null;
   if (slots.duration_min != null) return slots.duration_min;
@@ -817,6 +995,50 @@ function applyDurationLimitOverride(
     ready_to_search: false,
     missing_required: [],
     assistant_message: `한 번에 ${hours}시간 예약은 제한을 넘을 수 있어요. 안전하게 진행하려면 최대 8시간 이내로 나누거나 시간을 줄여서 요청해 주세요.`,
+    application_state: previousApplicationState ?? result.application_state,
+  };
+}
+
+function parseIsoDateOnly(value: string): string | null {
+  const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+  return match?.[1] ?? null;
+}
+
+function isoDateToEpochDay(value: string): number | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match?.[1] || !match[2] || !match[3]) return null;
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const time = Date.UTC(year, month - 1, day);
+  if (Number.isNaN(time)) return null;
+  return Math.floor(time / 86_400_000);
+}
+
+function isBeyondFutureBookingWindow(slots: FilledSlots | null | undefined, now: string): boolean {
+  if (!slots?.date) return false;
+  const today = parseIsoDateOnly(now);
+  if (!today) return false;
+  const todayDay = isoDateToEpochDay(today);
+  const slotDay = isoDateToEpochDay(slots.date);
+  if (todayDay == null || slotDay == null) return false;
+  return slotDay - todayDay > MAX_FUTURE_BOOKING_DAYS;
+}
+
+function applyFutureBookingWindowOverride(
+  result: ParseResult,
+  now: string,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (!isBeyondFutureBookingWindow(result.filled_slots, now)) return result;
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: ['date'],
+    filled_slots: emptyFilledSlots(),
+    assistant_message:
+      '너무 먼 날짜는 아직 GLS에서 신청 가능 여부를 안정적으로 확인하기 어려워요. 가까운 날짜로 다시 알려주세요.',
     application_state: previousApplicationState ?? result.application_state,
   };
 }
@@ -954,6 +1176,11 @@ function makeStatusEmitter(conversationId: string): (s: AutomationStatus) => voi
     chrome.runtime.sendMessage(msg).catch(() => {});
 
     if (status.kind === 'login_required') {
+      setLoginPrompt(conversationId, {
+        variant: status.reason,
+        tabId: null,
+      });
+
       if (status.reason === 'expired') {
         chrome.runtime
           .sendMessage({
@@ -1053,8 +1280,10 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!isLoginCompleteUrl(url)) return;
 
   for (const ctx of contexts.values()) {
-    if (ctx.loginPrompt?.tabId !== tabId) continue;
-    void resumeAfterLoginComplete(ctx.conversationId, ctx.loginPrompt.variant, tabId);
+    const prompt = ctx.loginPrompt;
+    if (!prompt) continue;
+    if (prompt.tabId != null && prompt.tabId !== tabId) continue;
+    void resumeAfterLoginComplete(ctx.conversationId, prompt.variant, tabId);
   }
 });
 
@@ -1135,9 +1364,20 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
       void (async () => {
         await rehydrationReady;
         await resumePendingStartIfReady(msg.conversationId);
-        const ctx =
+        let ctx =
           contexts.get(msg.conversationId) ??
-          (await hydrateContextFromServer(msg.conversationId));
+          (await hydrateContextFromServer(msg.conversationId)) ??
+          (await hydrateContextFromSnapshot(msg.conversationId)) ??
+          (await hydrateContextFromSummary(msg.conversationId));
+        const localSummary = (await loadConversationIndex()).find(
+          (item) => item.id === msg.conversationId,
+        );
+        if (
+          localSummary?.status === 'completed' &&
+          ctx?.conversationStatus !== 'completed'
+        ) {
+          ctx = await hydrateContextFromSummary(msg.conversationId);
+        }
         const queue = gls.getQueue(msg.conversationId);
         const restoredStatus =
           ctx?.conversationStatus === 'completed'
@@ -1300,10 +1540,11 @@ async function handleChatRequest(
     return { type: 'BG_CHAT_RESPONSE', result };
   }
 
+  const requestNow = apiClient.localOffsetIso();
   let result = await apiClient.parse({
     conversationId: msg.conversationId,
     history: msg.history,
-    now: apiClient.localOffsetIso(),
+    now: requestNow,
   });
   result = applyHeadcountRangeOverride(
     result,
@@ -1389,11 +1630,15 @@ async function handleChatRequest(
   }
 
   result = applyChatSafetyOverride(result, msg.latestMessage, ctx.applicationState);
+  result = applyAmbiguousMeridiemOverride(result, msg.latestMessage, ctx.applicationState);
 
   result = {
     ...result,
     filled_slots: normalizeSlotEndTime(result.filled_slots),
   };
+  result = applyFutureBookingWindowOverride(result, requestNow, ctx.applicationState);
+  result = applySameDayTimeOverride(result, ctx.applicationState);
+  result = applyTimeGranularityOverride(result, ctx.applicationState);
   result = applyDurationLimitOverride(result, ctx.applicationState);
 
   if (

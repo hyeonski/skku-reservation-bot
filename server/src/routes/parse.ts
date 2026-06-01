@@ -36,6 +36,9 @@ const ErrorResponse = z.object({
   message: z.string().optional(),
 });
 
+const MAX_FUTURE_BOOKING_DAYS = 180;
+const SUPPORTED_TIME_MINUTES = new Set([0, 30]);
+
 function parseStoredFilledSlots(value: unknown): FilledSlotsType | null {
   const parsed = FilledSlots.safeParse(value);
   return parsed.success ? parsed.data : null;
@@ -103,9 +106,52 @@ function hasImpossibleClock(text: string): boolean {
   return false;
 }
 
+function isSupportedReservationMinute(minute: number): boolean {
+  return SUPPORTED_TIME_MINUTES.has(minute);
+}
+
+function hasUnsupportedMinuteUnit(text: string): boolean {
+  const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
+  for (const match of matches) {
+    if (!match[2]) continue;
+    const minute = Number.parseInt(match[2], 10);
+    if (Number.isFinite(minute) && !isSupportedReservationMinute(minute)) return true;
+  }
+  return false;
+}
+
+function hasAmbiguousBareMeridiemTime(text: string): boolean {
+  const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
+  for (const match of matches) {
+    const hour = Number.parseInt(match[1] ?? '', 10);
+    if (!Number.isFinite(hour) || hour < 1 || hour > 12) continue;
+
+    const startIndex = match.index ?? 0;
+    const before = text.slice(Math.max(0, startIndex - 8), startIndex);
+    const segment = `${before}${match[0]}`;
+    if (/(오전|오후|아침|점심|낮|저녁|밤|새벽|정오|자정)/.test(segment)) {
+      continue;
+    }
+
+    return true;
+  }
+  return false;
+}
+
 function parseIsoDateOnly(value: string): string | null {
   const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
+}
+
+function isoDateToEpochDay(value: string): number | null {
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match?.[1] || !match[2] || !match[3]) return null;
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  const time = Date.UTC(year, month - 1, day);
+  if (Number.isNaN(time)) return null;
+  return Math.floor(time / 86_400_000);
 }
 
 function localMinutesFromIso(value: string): number | null {
@@ -137,6 +183,82 @@ function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMPa
   );
 }
 
+function isBeyondFutureBookingWindow(slots: FilledSlotsType, now: string): boolean {
+  if (!slots.date) return false;
+  const today = parseIsoDateOnly(now);
+  if (!today) return false;
+  const todayDay = isoDateToEpochDay(today);
+  const slotDay = isoDateToEpochDay(slots.date);
+  if (todayDay == null || slotDay == null) return false;
+  return slotDay - todayDay > MAX_FUTURE_BOOKING_DAYS;
+}
+
+function applyFutureBookingWindowOverride(result: LLMParseResult, now: string): LLMParseResult {
+  if (!isBeyondFutureBookingWindow(result.filled_slots, now)) return result;
+  return makeInvalidInputResult(
+    '너무 먼 날짜는 아직 GLS에서 신청 가능 여부를 안정적으로 확인하기 어려워요. 가까운 날짜로 다시 알려주세요.',
+    ['date'],
+  );
+}
+
+function applyStudentCouncilBuildingDisambiguation(
+  result: LLMParseResult,
+  text: string,
+): LLMParseResult {
+  const building = result.filled_slots.building?.trim();
+  if (building !== '학생회관') return result;
+  if (/학생\s*회관/.test(text)) return result;
+  if (!/학생\s*회/.test(text)) return result;
+
+  return {
+    ...result,
+    filled_slots: {
+      ...result.filled_slots,
+      building: null,
+    },
+  };
+}
+
+function crossesMidnight(slots: FilledSlotsType): boolean {
+  const startMinutes = timeToMinutes(slots.start_time);
+  const endMinutes = timeToMinutes(slots.end_time);
+  if (startMinutes != null && endMinutes != null && endMinutes <= startMinutes) {
+    return true;
+  }
+  if (startMinutes != null && slots.duration_min != null) {
+    return startMinutes + slots.duration_min >= 24 * 60;
+  }
+  return false;
+}
+
+function applySameDayTimeOverride(result: LLMParseResult): LLMParseResult {
+  if (!crossesMidnight(result.filled_slots)) return result;
+  return makeInvalidInputResult(
+    '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
+    ['start_time', 'end_time'],
+  );
+}
+
+function usesUnsupportedReservationMinute(slots: FilledSlotsType): boolean {
+  const startMinutes = timeToMinutes(slots.start_time);
+  const endMinutes = timeToMinutes(slots.end_time);
+  if (startMinutes != null && !isSupportedReservationMinute(startMinutes % 60)) return true;
+  if (endMinutes != null && !isSupportedReservationMinute(endMinutes % 60)) return true;
+  if (startMinutes != null && slots.duration_min != null) {
+    const derivedEndMinute = (startMinutes + slots.duration_min) % 60;
+    return !isSupportedReservationMinute(derivedEndMinute);
+  }
+  return false;
+}
+
+function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {
+  if (!usesUnsupportedReservationMinute(result.filled_slots)) return result;
+  return makeInvalidInputResult(
+    'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+    ['start_time', 'end_time'],
+  );
+}
+
 function makeImpossibleInputResult(text: string): LLMParseResult | null {
   if (hasImpossibleHeadcount(text)) {
     return makeInvalidInputResult(
@@ -147,6 +269,18 @@ function makeImpossibleInputResult(text: string): LLMParseResult | null {
   if (hasImpossibleClock(text)) {
     return makeInvalidInputResult(
       '시간은 0시부터 23시 사이로 알려주세요. 예: 18시부터 2시간',
+      ['start_time'],
+    );
+  }
+  if (hasUnsupportedMinuteUnit(text)) {
+    return makeInvalidInputResult(
+      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+      ['start_time', 'end_time'],
+    );
+  }
+  if (hasAmbiguousBareMeridiemTime(text)) {
+    return makeInvalidInputResult(
+      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
       ['start_time'],
     );
   }
@@ -259,7 +393,13 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
 
 export const __parseRouteTestables = {
   applyInlineSlotEdits,
+  applyFutureBookingWindowOverride,
   applyImpossibleSlotOverride,
+  applySameDayTimeOverride,
+  applyStudentCouncilBuildingDisambiguation,
+  applyTimeGranularityOverride,
+  hasAmbiguousBareMeridiemTime,
+  hasUnsupportedMinuteUnit,
   hasImpossibleClock,
   hasImpossibleHeadcount,
   isLikelyOutOfScopeSmallTalk,
@@ -321,7 +461,11 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       } else {
         try {
           llmResult = await parseWithLLM({ history: body.history, now: body.now });
+          llmResult = applyStudentCouncilBuildingDisambiguation(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
+          llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
+          llmResult = applySameDayTimeOverride(llmResult);
+          llmResult = applyTimeGranularityOverride(llmResult);
         } catch (err) {
           request.log.error({ err }, 'parseWithLLM failed');
           reply.code(502).send({
@@ -342,6 +486,9 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           ready_to_search: true,
           assistant_message: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
         };
+        llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
+        llmResult = applySameDayTimeOverride(llmResult);
+        llmResult = applyTimeGranularityOverride(llmResult);
       }
 
       const memories = await app.prisma.conversation.findMany({

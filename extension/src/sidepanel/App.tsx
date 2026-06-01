@@ -23,7 +23,7 @@ async function sendRuntime<T>(msg: unknown): Promise<T> {
 function mapSessionSummary(row: ConversationSessionSummary): SessionSummary {
   const completedPreview =
     row.status === 'completed'
-      ? `예약 완료 · ${row.confirmedSpaceLabel ?? row.confirmedReservationLabel ?? '완료'}`
+      ? `신청 저장 완료 · ${row.confirmedSpaceLabel ?? row.confirmedReservationLabel ?? '승인 대기'}`
       : '';
   return {
     id: row.id,

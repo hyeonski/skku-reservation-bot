@@ -5,8 +5,8 @@ interface SubmitProgressCardProps {
 
 const LABEL: Record<SubmitProgressCardProps['step'], string> = {
   filling: '폼 자동 작성 중…',
-  saving: 'GLS 에 저장 중…',
-  saved: '저장 완료',
+  saving: 'GLS에 신청 저장 중…',
+  saved: '신청 저장 완료 · 승인 대기',
 };
 
 const PROGRESS: Record<SubmitProgressCardProps['step'], number> = {
@@ -19,9 +19,9 @@ export function SubmitProgressCard({ step }: SubmitProgressCardProps) {
   return (
     <div className="card">
       <div className="card-head">
-        <div className="title">신청서 제출 중</div>
+        <div className="title">신청서 저장 진행</div>
         <div className={`tag ${step === 'saved' ? 'success' : 'accent'}`}>
-          {step === 'saved' ? '완료' : '진행'}
+          {step === 'saved' ? '승인 대기' : '진행'}
         </div>
       </div>
       <div className="card-body">
