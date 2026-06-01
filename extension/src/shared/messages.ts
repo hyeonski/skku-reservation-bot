@@ -195,6 +195,10 @@ export interface BgCheckBridge {
   type: 'BG_CHECK_BRIDGE';
 }
 
+export interface BgReadFormSnapshot {
+  type: 'BG_READ_FORM_SNAPSHOT';
+}
+
 export interface BgCheckAvailability {
   type: 'BG_CHECK_AVAILABILITY';
   candidate: SpaceCandidate;
@@ -244,6 +248,13 @@ export interface ContentSessionState {
 export interface ContentBridgeState {
   type: 'CONTENT_BRIDGE_STATE';
   ready: boolean;
+  error?: string;
+}
+
+export interface ContentFormSnapshotResult {
+  type: 'CONTENT_FORM_SNAPSHOT_RESULT';
+  ok: boolean;
+  snapshot?: Record<string, string>;
   error?: string;
 }
 
@@ -322,6 +333,7 @@ export type BackgroundToPopup =
 export type BackgroundToContent =
   | BgCheckSession
   | BgCheckBridge
+  | BgReadFormSnapshot
   | BgCheckAvailability
   | BgSubmitReservation
   | BgClearPreviewForm
@@ -330,6 +342,7 @@ export type BackgroundToContent =
 export type ContentToBackground =
   | ContentSessionState
   | ContentBridgeState
+  | ContentFormSnapshotResult
   | ContentAvailabilityResult
   | ContentSubmitResult
   | ContentPreviewResult;

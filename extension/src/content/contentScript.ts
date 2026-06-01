@@ -21,6 +21,7 @@ import type {
   BgSubmitReservation,
   ContentAvailabilityResult,
   ContentBridgeState,
+  ContentFormSnapshotResult,
   ContentPreviewResult,
   ContentSessionState,
   ContentSubmitResult,
@@ -114,6 +115,16 @@ chrome.runtime.onMessage.addListener(
             const reply: ContentBridgeState = {
               type: 'CONTENT_BRIDGE_STATE',
               ready: true,
+            };
+            sendResponse(reply);
+            break;
+          }
+          case 'BG_READ_FORM_SNAPSHOT': {
+            const snapshot = await runInPage<Record<string, string>>('readFormSnapshot', undefined, 3000);
+            const reply: ContentFormSnapshotResult = {
+              type: 'CONTENT_FORM_SNAPSHOT_RESULT',
+              ok: true,
+              snapshot,
             };
             sendResponse(reply);
             break;
@@ -233,6 +244,13 @@ chrome.runtime.onMessage.addListener(
           const reply: ContentBridgeState = {
             type: 'CONTENT_BRIDGE_STATE',
             ready: false,
+            error: message,
+          };
+          sendResponse(reply);
+        } else if ((msg as BackgroundToContent).type === 'BG_READ_FORM_SNAPSHOT') {
+          const reply: ContentFormSnapshotResult = {
+            type: 'CONTENT_FORM_SNAPSHOT_RESULT',
+            ok: false,
             error: message,
           };
           sendResponse(reply);

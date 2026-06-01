@@ -11,7 +11,7 @@
  *   · confirmReservation(formData)   → POPUP_CONFIRM_RESERVATION (decision #2 — 후보 confirm + 제출 통합)
  *   · findAlternative()             → POPUP_REJECT_CANDIDATE
  *   · cancel()                       → POPUP_CANCEL
- *   · newConversation()              → conversationId 갱신 + state reset
+ *   · newConversation()              → 기존 자동화 취소 + conversationId 갱신 + state reset
  *
  * Phase 1c 단계 — onboarding/session 복원, 만료/재로그인 재개 등은 다음 라운드.
  */
@@ -113,6 +113,21 @@ function emptyState(conversationId: string): ConversationState {
 function freshConversationId(): string {
   // crypto.randomUUID 는 사이드패널 컨텍스트에서도 사용 가능 (Chrome 110+).
   return crypto.randomUUID();
+}
+
+function hasSearchReadySlots(slots: FilledSlots | null | undefined): boolean {
+  if (!slots) return false;
+  return Boolean(
+    slots.date &&
+      slots.start_time &&
+      (slots.end_time || slots.duration_min != null) &&
+      slots.headcount != null,
+  );
+}
+
+function hasSlotSearchCue(text: string): boolean {
+  const normalized = text.replace(/\s+/g, '');
+  return /(?:바꾸|변경|수정|정정|다시|아니|말고|대신|시간|시부터|까지|내일|모레|다음|월|일|캠퍼스|율전|명륜|건물|공간|명으로)/.test(normalized);
 }
 
 /** ParseResult.filled_slots → shared FilledSlots 캐스팅 (구조 동일). */
@@ -241,6 +256,7 @@ export function useConversation() {
         case 'BG_CANDIDATE_RESULT': {
           if (msg.conversationId !== stateRef.current.conversationId) return;
           setState((s) => {
+            if (!s.candidateResults.has(msg.spaceCode)) return s;
             const results = new Map(s.candidateResults);
             results.set(msg.spaceCode, {
               spaceCode: msg.spaceCode,
@@ -256,7 +272,12 @@ export function useConversation() {
 
         case 'BG_CANDIDATE_PROPOSAL': {
           if (msg.conversationId !== stateRef.current.conversationId) return;
-          setState((s) => ({ ...s, proposedCandidate: msg.candidate }));
+          setState((s) => {
+            if (!s.candidates.some((candidate) => candidate.glsSpaceCode === msg.candidate.glsSpaceCode)) {
+              return s;
+            }
+            return { ...s, proposedCandidate: msg.candidate };
+          });
           break;
         }
 
@@ -349,11 +370,36 @@ export function useConversation() {
       ...s,
       messages: [...s.messages, botMsg],
       parsing: false,
-      slots: parsed.filled_slots,
-      applicationState: parsed.application_state,
+      slots:
+        parsed.intent === 'cancel'
+          ? null
+          : parsed.intent === 'request_alternative'
+            ? s.slots
+            : parsed.filled_slots,
+      applicationState:
+        parsed.intent === 'cancel'
+          ? null
+          : parsed.intent === 'request_alternative'
+            ? s.applicationState
+            : parsed.application_state,
+      ...(parsed.intent === 'cancel'
+        ? {
+            automationStatus: { kind: 'idle' as const },
+            candidates: [],
+            candidateResults: new Map<string, CandidateProgress>(),
+            currentIdx: -1,
+            proposedCandidate: null,
+            submitStep: null,
+            loginPrompt: null,
+          }
+        : {}),
     }));
 
-    if (parsed.intent === 'request_alternative' && previousState.proposedCandidate) {
+    const hasAlternativeContext =
+      previousState.proposedCandidate !== null ||
+      previousState.automationStatus.kind === 'candidate_found' ||
+      previousState.candidates.length > 0;
+    if (parsed.intent === 'request_alternative' && hasAlternativeContext) {
       const altMsg: PopupRejectCandidate = {
         type: 'POPUP_REJECT_CANDIDATE',
         conversationId,
@@ -366,7 +412,10 @@ export function useConversation() {
       return;
     }
 
-    if (parsed.ready_to_search) {
+    const shouldStartSearch =
+      (parsed.ready_to_search && (!previousState.proposedCandidate || hasSlotSearchCue(trimmed))) ||
+      (parsed.intent === 'modify_slot' && hasSearchReadySlots(parsed.filled_slots) && hasSlotSearchCue(trimmed));
+    if (shouldStartSearch) {
       // 곧바로 background 에 검색 시작 요청. 결과는 BG_STATUS_UPDATE /
       // BG_SEARCH_STARTED / BG_CANDIDATE_RESULT 로 스트리밍.
       const startMsg: PopupStartSearch = {
@@ -539,6 +588,18 @@ export function useConversation() {
 
   /** 새 대화 시작 — 모든 state 리셋 + conversationId 갱신. */
   const newConversation = useCallback(() => {
+    const current = stateRef.current;
+    const hasConversationWork =
+      current.messages.length > 0 ||
+      current.automationStatus.kind !== 'idle' ||
+      current.candidates.length > 0 ||
+      current.proposedCandidate !== null;
+    if (hasConversationWork) {
+      const msg: PopupCancel = { type: 'POPUP_CANCEL', conversationId: current.conversationId };
+      void sendRuntime(msg).catch(() => {
+        /* best-effort: local reset should still happen */
+      });
+    }
     const next = emptyState(freshConversationId());
     stateRef.current = next;
     setState(next);

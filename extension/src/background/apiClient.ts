@@ -22,7 +22,20 @@ export const SERVER_BASE_URL = 'http://localhost:8000';
 export interface ParseArgs {
   conversationId: string;
   history: ChatMessage[];
-  now?: string; // ISO; default = new Date().toISOString()
+  now?: string; // ISO with local offset; default = localOffsetIso()
+}
+
+export function localOffsetIso(date = new Date()): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absOffset = Math.abs(offsetMinutes);
+  const offsetHour = String(Math.floor(absOffset / 60)).padStart(2, '0');
+  const offsetMinute = String(absOffset % 60).padStart(2, '0');
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .replace('Z', '');
+
+  return `${local}${sign}${offsetHour}:${offsetMinute}`;
 }
 
 export interface ConversationDto {
@@ -111,7 +124,7 @@ export async function parse(args: ParseArgs): Promise<ParseResult> {
   const body = {
     conversation_id: args.conversationId,
     history: args.history,
-    now: args.now ?? new Date().toISOString(),
+    now: args.now ?? localOffsetIso(),
   };
   return request<ParseResult>('/parse', {
     method: 'POST',

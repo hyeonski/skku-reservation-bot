@@ -47,6 +47,8 @@ const FREQUENCY_CONFIDENCE_STEP = 0.05;
 
 const APPLICATION_COLLECTOR_PROMPT =
   '신청서에는 어떤 단체의 어떤 행사로 넣을까요? 예: 소프트웨어학과 학생회 정기회의';
+const APPLICATION_FIELD_LABEL_PATTERN =
+  '(?:행사명|주관단체|단체|사용목적|목적|행사구분|행사인원|인원)';
 
 export interface ConversationMemoryCandidate {
   conversationId: string;
@@ -109,8 +111,7 @@ function cleanSentenceEnding(text: string): string {
   return normalizeWhitespace(
     text
       .replace(/[.?!]+$/g, '')
-      .replace(/(?:으로|로)?\s*바꿔줘요?$/g, '')
-      .replace(/(?:으로|로)?\s*변경해줘요?$/g, '')
+      .replace(/(?:으로|로)?\s*(?:바꾸고|바꿔줘요?|바꿔|변경하고|변경해줘요?|변경|수정하고|수정해줘요?|수정)$/g, '')
       .replace(/(?:으로|로)?\s*부탁해요?$/g, '')
       .replace(/(?:으로|로)?\s*해주세요?$/g, ''),
   );
@@ -152,9 +153,35 @@ function isLikelyApplicationDescription(text: string, history: ChatMessage[]): b
   if (previousAssistant.includes(APPLICATION_COLLECTOR_PROMPT)) return true;
   if (containsScheduleSignal(normalized)) return false;
   if (/(회의실|강의실|공간|예약|잡아줘|잡아\b)/.test(normalized)) return false;
-  return /(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터)/.test(
+  return /(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터)/.test(
     normalized,
   );
+}
+
+function stripScheduleAndReservationWords(text: string): string {
+  return normalizeWhitespace(
+    text
+      .replace(/\d{4}[-./]\d{1,2}[-./]\d{1,2}/g, ' ')
+      .replace(/\d{1,2}\s*월\s*\d{1,2}\s*일(?:\s*[월화수목금토일](?:요일)?)?/g, ' ')
+      .replace(/(?:오늘|내일|모레|이번\s*주|다음\s*주)\s*[월화수목금토일]?(?:요일)?/g, ' ')
+      .replace(/(?:오전|오후)?\s*\d{1,2}\s*시(?!간)(?:\s*\d{1,2}\s*분)?(?:부터|까지)?/g, ' ')
+      .replace(/\d+\s*(?:시간|분|명)/g, ' ')
+      .replace(/(?:회의실|강의실|공간|호실|예약|신청|잡아줘|잡아 줘|찾아줘|찾아 줘|빌려줘|빌려 줘|해줘|해주세요)/g, ' ')
+      .replace(/[,\-/~]+/g, ' '),
+  );
+}
+
+function extractInlineApplicationDescription(text: string): string | null {
+  const cleaned = stripScheduleAndReservationWords(text).replace(/\s*목적으로$/g, '');
+  if (cleaned.length < 3) return null;
+  if (
+    !/(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터|E2E|테스트|검증)/i.test(
+      cleaned,
+    )
+  ) {
+    return null;
+  }
+  return cleaned;
 }
 
 function baseDraft(headcount: number | null): ReservationFormData {
@@ -199,7 +226,10 @@ function classifyHangsa(
   if (/(학과|학부|전공|연구실|랩)/.test(normalized)) {
     return { code: '116', confidence: 'medium' };
   }
-  if (/(세미나|스터디|회의|미팅|간담회|워크숍|정기회의|운영회의)/.test(normalized)) {
+  if (/(세미나|스터디)/.test(normalized)) {
+    return { code: '113', confidence: 'high' };
+  }
+  if (/(회의|미팅|간담회|워크숍|정기회의|운영회의)/.test(normalized)) {
     return {
       code: '113',
       confidence: 'low',
@@ -217,9 +247,9 @@ function classifyHangsa(
 
 function extractOrganization(text: string): string | null {
   const normalized = normalizeWhitespace(text);
-  const match = normalized.match(
-    /(.+(?:학생회|동아리|총학생회|위원회|연구실|랩|센터|본부|행정실|학과|학부|전공|팀))/,
-  );
+  const match =
+    normalized.match(/(.+?(?:학생회|동아리|총학생회|학회|연구실|랩|센터|본부|행정실|팀))/) ??
+    normalized.match(/(.+?(?:학과|학부|전공|위원회))/);
   return match?.[1] ? normalizeWhitespace(match[1]) : null;
 }
 
@@ -227,9 +257,22 @@ function extractExplicitField(
   text: string,
   label: string,
 ): string | null {
-  const match = text.match(new RegExp(`${label}(?:만|은|는)?\\s*[:：]?\\s*(.+)$`));
+  const match = text.match(
+    new RegExp(
+      `${label}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?\\s*(.+?)(?=\\s*(?:그리고|,|;)?\\s*${APPLICATION_FIELD_LABEL_PATTERN}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?|$)`,
+    ),
+  );
   if (!match?.[1]) return null;
   return cleanSentenceEnding(match[1]);
+}
+
+function extractHeadcountUpdate(text: string): number | null {
+  const match = text.match(
+    /^(?:아니(?:요)?\s*)?(?:행사\s*)?(?:인원(?:은|을|는)?\s*)?(\d+)\s*명(?:으로)?\s*(?:(?:바꿔?|변경|수정)(?:해줘|해주세요)?)?$/,
+  );
+  if (!match?.[1]) return null;
+  const headcount = Number.parseInt(match[1], 10);
+  return Number.isFinite(headcount) && headcount > 0 ? headcount : null;
 }
 
 function extractFieldUpdates(
@@ -250,12 +293,17 @@ function extractFieldUpdates(
     nextConfidence.hangsaGbCode = 'medium';
   }
   const touchedFields = new Set<ApplicationField>();
+  let changed =
+    currentDraft != null &&
+    filledSlots.headcount != null &&
+    currentDraft.headcount !== filledSlots.headcount;
 
   const organization = extractExplicitField(normalized, '(?:주관단체|단체)');
   if (organization) {
     nextDraft.organization = organization;
     nextConfidence.organization = 'high';
     touchedFields.add('organization');
+    changed = true;
   }
 
   const eventName = extractExplicitField(normalized, '행사명');
@@ -263,6 +311,7 @@ function extractFieldUpdates(
     nextDraft.eventName = eventName;
     nextConfidence.eventName = 'high';
     touchedFields.add('eventName');
+    changed = true;
   }
 
   const purpose = extractExplicitField(normalized, '(?:사용목적|목적)');
@@ -270,6 +319,7 @@ function extractFieldUpdates(
     nextDraft.purpose = purpose;
     nextConfidence.purpose = 'high';
     touchedFields.add('purpose');
+    changed = true;
   }
 
   if (/행사구분/.test(normalized)) {
@@ -277,9 +327,16 @@ function extractFieldUpdates(
     nextDraft.hangsaGbCode = hangsa.code;
     nextConfidence.hangsaGbCode = hangsa.confidence;
     touchedFields.add('hangsaGbCode');
+    changed = true;
   }
 
-  if (touchedFields.size === 0) return null;
+  const headcount = extractHeadcountUpdate(normalized);
+  if (headcount && headcount !== nextDraft.headcount) {
+    nextDraft.headcount = headcount;
+    changed = true;
+  }
+
+  if (!changed) return null;
 
   if (touchedFields.has('eventName') && !touchedFields.has('purpose')) {
     nextDraft.purpose = `${nextDraft.eventName} 진행`;
@@ -554,11 +611,24 @@ export function buildApplicationState(
   const latestUser = normalizeWhitespace(args.latestUserMessage);
   const previousState = args.previousState ?? makeEmptyState();
   let nextIntent = args.baseIntent;
+  const draftHeadcountChanged =
+    previousState.draft != null &&
+    args.filledSlots.headcount != null &&
+    previousState.draft.headcount !== args.filledSlots.headcount;
   let draft = previousState.draft ? withHeadcount(previousState.draft, args.filledSlots.headcount) : null;
   let confidence = cloneConfidence(previousState.confidence);
-  let source = previousState.source;
+  let source: ApplicationState['source'] = draftHeadcountChanged
+    ? 'user_modified'
+    : previousState.source;
   let suggestedMemory = previousState.suggested_memory;
   let assistantMessage = args.baseAssistantMessage;
+  if (draftHeadcountChanged) {
+    nextIntent = 'modify_application';
+    suggestedMemory = null;
+  }
+  const onlyMissingHangsa =
+    previousState.missing_application.length === 1 &&
+    previousState.missing_application[0] === 'hangsaGbCode';
 
   if (suggestedMemory && isAffirmative(latestUser)) {
     draft = withHeadcount(suggestedMemory.formData, args.filledSlots.headcount);
@@ -589,7 +659,7 @@ export function buildApplicationState(
       assistantMessage = '신청 정보를 업데이트했어요. 아래 카드에서 확인해 주세요.';
     } else if (
       draft &&
-      previousState.missing_application.includes('hangsaGbCode') &&
+      onlyMissingHangsa &&
       /(학생회|동아리|학과|학부|전공|세미나|스터디)/.test(latestUser)
     ) {
       const hangsaOnly = applyHangsaOnlyUpdate(latestUser, draft, confidence);
@@ -606,6 +676,18 @@ export function buildApplicationState(
         source = derived.source;
         nextIntent = 'modify_application';
         assistantMessage = '신청 정보를 이렇게 채울게요. 아래 카드에서 확인해 주세요.';
+      }
+    } else if (args.readyToSearch && !draft) {
+      const inlineDescription = extractInlineApplicationDescription(latestUser);
+      const derived = inlineDescription
+        ? deriveDraftFromDescription(inlineDescription, args.filledSlots, draft)
+        : null;
+      if (derived) {
+        draft = derived.draft;
+        confidence = derived.confidence;
+        source = derived.source;
+        nextIntent = 'modify_application';
+        assistantMessage = '요청에 포함된 행사 정보를 신청서 초안에 반영했어요. 아래 카드에서 확인해 주세요.';
       }
     }
   }

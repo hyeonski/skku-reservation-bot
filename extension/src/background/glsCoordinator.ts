@@ -24,10 +24,12 @@ import type {
   BgCheckBridge,
   BgCheckSession,
   BgCheckAvailability,
+  BgReadFormSnapshot,
   BgClearPreviewForm,
   BgPreviewReservation,
   BgSubmitReservation,
   ContentBridgeState,
+  ContentFormSnapshotResult,
   ContentSessionState,
   ContentAvailabilityResult,
   ContentPreviewResult,
@@ -96,6 +98,7 @@ async function rehydrateQueues(): Promise<void> {
 }
 
 const queuesReady = rehydrateQueues();
+const cancelledConversations = new Set<string>();
 
 export async function waitForQueuesRehydrated(): Promise<void> {
   await queuesReady;
@@ -113,8 +116,13 @@ export function setQueueTabId(conversationId: string, tabId: number): void {
 }
 
 export function clearQueue(conversationId: string): void {
+  const state = queues.get(conversationId);
+  cancelledConversations.add(conversationId);
   queues.delete(conversationId);
   void persistQueues();
+  if (state?.tabId !== undefined) {
+    void chrome.tabs.reload(state.tabId).catch(() => {});
+  }
 }
 
 export function markQueuesDirty(): void {
@@ -345,11 +353,28 @@ function pickSearchFilters(
   slots: FilledSlots,
 ): { campusCode?: string; buildingNo?: string; building?: string; space?: string } {
   const campusCode = resolveCampusCode(slots.campus);
+  const space = normalizeSearchSpaceFilter(slots.space);
   return {
     ...(campusCode ? { campusCode } : {}),
     ...(slots.building ? { building: slots.building.trim() } : {}),
-    ...(slots.space ? { space: slots.space.trim() } : {}),
+    ...(space ? { space } : {}),
   };
+}
+
+function normalizeSearchSpaceFilter(space: string | null): string | undefined {
+  const normalized = String(space ?? '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+
+  const compact = normalized.replace(/\s+/g, '');
+  if (/^(회의실|강의실|공간|방|장소)$/.test(compact)) return undefined;
+
+  const meaningful = compact.replace(
+    /(E2E|테스트|기능검증|회의실|공간|방|예약|대여|잡아줘|잡아주세요|찾아줘|찾아주세요|예약해줘|예약해주세요|빌려줘|빌려주세요)/g,
+    '',
+  );
+  if (!meaningful) return undefined;
+
+  return normalized;
 }
 
 function resolveCampusCode(campus: string | null): string | undefined {
@@ -393,6 +418,126 @@ function deriveEndTime(slots: FilledSlots): string | null {
   return `${eh}:${em}`;
 }
 
+function hasFormValue(value: string | undefined): boolean {
+  return String(value ?? '').replace(/\s+/g, '').length > 0;
+}
+
+function hasUserDraftValue(value: string | undefined): boolean {
+  const normalized = String(value ?? '').replace(/\s+/g, '');
+  return normalized.length > 0 && normalized !== '선택';
+}
+
+function hasExistingReservationDraft(snapshot: Record<string, string>): boolean {
+  const userFields = [
+    'hangsaGbCode',
+    'hangsaRendered',
+    'organization',
+    'organizationRendered',
+    'eventName',
+    'eventNameRendered',
+    'headcount',
+    'headcountRendered',
+    'purpose',
+    'purposeRendered',
+  ];
+  if (userFields.some((field) => hasFormValue(snapshot[field]))) {
+    return true;
+  }
+
+  const selectedReservationFields = [
+    'spaceCode',
+    'spaceText',
+    'startTime',
+    'startText',
+    'startRendered',
+    'endTime',
+    'endText',
+    'endRendered',
+  ];
+  return selectedReservationFields.some((field) => hasFormValue(snapshot[field]));
+}
+
+function hasUserManagedDraftFields(snapshot: Record<string, string>): boolean {
+  const userFields = [
+    'hangsaGbCode',
+    'hangsaRendered',
+    'organization',
+    'organizationRendered',
+    'eventName',
+    'eventNameRendered',
+    'purpose',
+    'purposeRendered',
+  ];
+  return userFields.some((field) => hasUserDraftValue(snapshot[field]));
+}
+
+function normalizeSnapshotText(value: string | undefined): string {
+  return String(value ?? '').replace(/\s+/g, '');
+}
+
+function snapshotFieldMatches(
+  snapshotValue: string | undefined,
+  expected: string | number | undefined,
+): boolean {
+  if (!hasFormValue(snapshotValue) || expected === undefined) return true;
+  return normalizeSnapshotText(snapshotValue).includes(normalizeSnapshotText(String(expected)));
+}
+
+function snapshotTimeMatches(snapshotValue: string | undefined, expected: string): boolean {
+  if (!hasFormValue(snapshotValue)) return true;
+  const expectedHHMM = expected.slice(0, 5);
+  return normalizeSnapshotText(snapshotValue).includes(expectedHHMM);
+}
+
+function snapshotDateMatches(snapshotValue: string | undefined, expected: string): boolean {
+  if (!hasFormValue(snapshotValue)) return true;
+  const normalized = normalizeSnapshotText(snapshotValue).replace(/[.]/g, '-');
+  return normalized.includes(expected);
+}
+
+function snapshotMatchesManagedPreview(
+  snapshot: Record<string, string>,
+  state: CandidateQueueState | undefined,
+): state is CandidateQueueState {
+  if (!state?.lastProposed) return false;
+  const candidate = state.lastProposed;
+  const spaceText = `${snapshot.spaceCode ?? ''} ${snapshot.spaceText ?? ''}`;
+  if (
+    hasFormValue(spaceText) &&
+    !spaceText.includes(candidate.glsSpaceCode) &&
+    !spaceText.includes(candidate.roomName)
+  ) {
+    return false;
+  }
+
+  if (!snapshotDateMatches(snapshot.date || snapshot.dateRendered, state.date)) return false;
+  if (!snapshotTimeMatches(snapshot.startTime || snapshot.startText || snapshot.startRendered, state.startTime)) return false;
+  if (!snapshotTimeMatches(snapshot.endTime || snapshot.endText || snapshot.endRendered, state.endTime)) return false;
+
+  const formData = state.pendingFormData;
+  if (!formData) return true;
+  return (
+    snapshotFieldMatches(snapshot.organization || snapshot.organizationRendered, formData.organization) &&
+    snapshotFieldMatches(snapshot.eventName || snapshot.eventNameRendered, formData.eventName) &&
+    snapshotFieldMatches(snapshot.headcount || snapshot.headcountRendered, formData.headcount) &&
+    snapshotFieldMatches(snapshot.purpose || snapshot.purposeRendered, formData.purpose)
+  );
+}
+
+function isNoActiveReservationPopup(error: string | undefined): boolean {
+  return !!error && (
+    error.includes('no popupFrame open') ||
+    error.includes('popupFrame') ||
+    error.includes('popup divManage form not ready')
+  );
+}
+
+async function readCurrentFormSnapshot(tabId: number): Promise<ContentFormSnapshotResult> {
+  return sendToAutomationTab<BgReadFormSnapshot, ContentFormSnapshotResult>(tabId, {
+    type: 'BG_READ_FORM_SNAPSHOT',
+  });
+}
+
 // ----- flow entry -----
 
 export interface RunReservationFlowArgs {
@@ -419,6 +564,7 @@ export interface RunReservationFlowArgs {
 export async function runReservationFlow(args: RunReservationFlowArgs): Promise<void> {
   const { conversationId, slots, onStatusChange } = args;
   const emitBroadcast = args.emitBroadcast ?? (() => {});
+  cancelledConversations.delete(conversationId);
 
   if (slots.headcount == null) {
     onStatusChange({ kind: 'error', message: 'headcount이 비어 있습니다.' });
@@ -465,6 +611,49 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   }
   if (!session.loggedIn) {
     onStatusChange({ kind: 'login_required', reason: 'needed' });
+    return;
+  }
+
+  let existingForm: ContentFormSnapshotResult;
+  try {
+    existingForm = await readCurrentFormSnapshot(tabId);
+  } catch (e) {
+    onStatusChange({
+      kind: 'error',
+      message: `GLS 신청서 상태 확인 실패: ${(e as Error).message}`,
+    });
+    return;
+  }
+  if (existingForm.ok && existingForm.snapshot && hasExistingReservationDraft(existingForm.snapshot)) {
+    const currentQueue = queues.get(conversationId);
+    if (
+      snapshotMatchesManagedPreview(existingForm.snapshot, currentQueue) ||
+      !hasUserManagedDraftFields(existingForm.snapshot)
+    ) {
+      try {
+        await sendToAutomationTab<BgClearPreviewForm, { ok: true }>(tabId, {
+          type: 'BG_CLEAR_PREVIEW_FORM',
+        });
+      } catch (e) {
+        onStatusChange({
+          kind: 'error',
+          message: `기존 미리보기 신청서를 정리하지 못해 자동화를 시작하지 않았어요: ${(e as Error).message}`,
+        });
+        return;
+      }
+    } else {
+      onStatusChange({
+        kind: 'error',
+        message: 'GLS에서 작성 중인 신청서가 있어 덮어쓰지 않았어요. 기존 신청서를 저장하거나 닫은 뒤 다시 시도해 주세요.',
+      });
+      return;
+    }
+  }
+  if (!existingForm.ok && !isNoActiveReservationPopup(existingForm.error)) {
+    onStatusChange({
+      kind: 'error',
+      message: 'GLS 신청서 상태를 안전하게 확인하지 못해 자동화를 시작하지 않았어요. GLS 화면을 확인한 뒤 다시 시도해 주세요.',
+    });
     return;
   }
 
@@ -534,6 +723,10 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   await searchNext(state, onStatusChange, emitBroadcast);
 }
 
+function isQueueActive(state: CandidateQueueState): boolean {
+  return !cancelledConversations.has(state.conversationId) && queues.get(state.conversationId) === state;
+}
+
 /**
  * Iterate the remaining queue until one candidate is available, then propose it
  * to the popup and return. If none available, emit no_candidate and clear queue.
@@ -544,6 +737,7 @@ async function searchNext(
   emitBroadcast: (msg: CoordinatorBroadcast) => void = () => {},
 ): Promise<void> {
   while (state.remaining.length > 0) {
+    if (!isQueueActive(state)) return;
     const candidate = state.remaining.shift()!;
     state.triedCount += 1;
     void persistQueues();
@@ -565,6 +759,7 @@ async function searchNext(
         endHour: state.endHour,
       });
     } catch (e) {
+      if (!isQueueActive(state)) return;
       // Transient content error — 로그에 실패로 남기고 다음 후보로.
       state.log.push({
         glsSpaceCode: candidate.glsSpaceCode,
@@ -593,6 +788,8 @@ async function searchNext(
       void persistQueues();
       continue;
     }
+
+    if (!isQueueActive(state)) return;
 
     state.log.push({
       glsSpaceCode: candidate.glsSpaceCode,
@@ -626,6 +823,7 @@ async function searchNext(
     }
 
     if (result.available) {
+      if (!isQueueActive(state)) return;
       state.lastProposed = candidate;
       void persistQueues();
       emitBroadcast({
@@ -674,6 +872,7 @@ async function searchNext(
     });
   }
 
+  if (!isQueueActive(state)) return;
   onStatusChange({ kind: 'no_candidate', log: state.log });
   queues.delete(state.conversationId);
   void persistQueues();

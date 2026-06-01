@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApplicationState } from './state.js';
 import { buildReminderCandidate } from './reminders.js';
+import { ApplicationState } from '../schemas/parse.js';
 
 const baseSlots = {
   date: '2026-05-20',
@@ -31,6 +32,204 @@ test('buildApplicationState derives application draft from one-line description'
   assert.equal(result.applicationState?.draft?.eventName, '소프트웨어학과 학생회 정기회의');
   assert.equal(result.applicationState?.draft?.hangsaGbCode, '111');
   assert.equal(result.applicationState?.needs_application_collection, false);
+});
+
+test('buildApplicationState derives application draft embedded in initial reservation request', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'user',
+        content: '7월 23일 18시부터 2시간 20명 SW학생회 E2E 테스트 운영회의 예약해줘',
+      },
+    ],
+    latestUserMessage: '7월 23일 18시부터 2시간 20명 SW학생회 E2E 테스트 운영회의 예약해줘',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: {
+      ...baseSlots,
+      date: '2026-07-23',
+      duration_min: 120,
+      end_time: null,
+      headcount: 20,
+    },
+    readyToSearch: true,
+    previousState: null,
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState?.draft?.organization, 'SW학생회');
+  assert.equal(result.applicationState?.draft?.eventName, 'SW학생회 E2E 테스트 운영회의');
+  assert.equal(result.applicationState?.draft?.hangsaGbCode, '111');
+  assert.equal(result.applicationState?.needs_application_collection, false);
+});
+
+test('buildApplicationState does not treat "목적으로" as an explicit empty purpose label', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'user',
+        content:
+          '10월 31일 16시부터 2시간 20명 컴공 학생회 E2E 회귀28 운영위원회 회의 목적으로 회의실 잡아줘',
+      },
+    ],
+    latestUserMessage:
+      '10월 31일 16시부터 2시간 20명 컴공 학생회 E2E 회귀28 운영위원회 회의 목적으로 회의실 잡아줘',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: {
+      ...baseSlots,
+      date: '2026-10-31',
+      start_time: '16:00',
+      end_time: null,
+      duration_min: 120,
+      headcount: 20,
+    },
+    readyToSearch: true,
+    previousState: null,
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState?.draft?.organization, '컴공 학생회');
+  assert.equal(
+    result.applicationState?.draft?.eventName,
+    '컴공 학생회 E2E 회귀28 운영위원회 회의',
+  );
+  assert.equal(result.applicationState?.draft?.purpose, '컴공 학생회 E2E 회귀28 운영위원회 회의 진행');
+  assert.equal(result.applicationState?.draft?.hangsaGbCode, '111');
+  assert.equal(result.applicationState?.needs_application_collection, false);
+});
+
+test('buildApplicationState returns serializable partial draft when organization is missing', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'user',
+        content: '7월 23일 18시부터 2시간 12명 E2E 테스트 덮어쓰기 방지 회의실 잡아줘',
+      },
+    ],
+    latestUserMessage: '7월 23일 18시부터 2시간 12명 E2E 테스트 덮어쓰기 방지 회의실 잡아줘',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: {
+      ...baseSlots,
+      date: '2026-07-23',
+      duration_min: 120,
+      end_time: null,
+      headcount: 12,
+    },
+    readyToSearch: true,
+    previousState: null,
+    memories: [],
+  });
+
+  assert.equal(result.applicationState.draft?.organization, '');
+  assert.deepEqual(result.applicationState.missing_application, [
+    'organization',
+    'hangsaGbCode',
+  ]);
+  assert.doesNotThrow(() => ApplicationState.parse(result.applicationState));
+});
+
+test('buildApplicationState treats rich application follow-up as draft details when multiple fields are missing', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'assistant',
+        content: '단체와 행사명을 알려주세요',
+      },
+      {
+        role: 'user',
+        content: 'SW학생회 운영회의',
+      },
+    ],
+    latestUserMessage: 'SW학생회 운영회의',
+    baseIntent: 'modify_application',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: {
+      ...baseSlots,
+      headcount: 10,
+    },
+    readyToSearch: false,
+    previousState: {
+      draft: {
+        hangsaGbCode: '117',
+        organization: '',
+        eventName: 'E2E 테스트 다중정정',
+        headcount: 10,
+        purpose: 'E2E 테스트 다중정정 진행',
+      },
+      missing_application: ['organization', 'hangsaGbCode'],
+      needs_application_collection: true,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'low',
+        eventName: 'medium',
+        purpose: 'medium',
+        hangsaGbCode: 'low',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.organization, 'SW학생회');
+  assert.equal(result.applicationState.draft?.eventName, 'SW학생회 운영회의');
+  assert.equal(result.applicationState.draft?.hangsaGbCode, '111');
+  assert.equal(result.applicationState.needs_application_collection, false);
+});
+
+test('buildApplicationState accepts seminar follow-up as organization and event classification', () => {
+  const result = buildApplicationState({
+    history: [
+      {
+        role: 'assistant',
+        content: '단체와 행사명을 알려주세요',
+      },
+      {
+        role: 'user',
+        content: 'AI학회 E2E 회귀27 세미나',
+      },
+    ],
+    latestUserMessage: 'AI학회 E2E 회귀27 세미나',
+    baseIntent: 'modify_application',
+    baseAssistantMessage: '단체와 행사명을 알려주세요',
+    filledSlots: {
+      ...baseSlots,
+      headcount: 10,
+    },
+    readyToSearch: false,
+    previousState: {
+      draft: {
+        hangsaGbCode: '113',
+        organization: '',
+        eventName: 'AI학회 E2E 회귀27 세미나',
+        headcount: 10,
+        purpose: 'AI학회 E2E 회귀27 세미나 진행',
+      },
+      missing_application: ['organization', 'hangsaGbCode'],
+      needs_application_collection: true,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'low',
+        eventName: 'medium',
+        purpose: 'medium',
+        hangsaGbCode: 'low',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.organization, 'AI학회');
+  assert.equal(result.applicationState.draft?.eventName, 'AI학회 E2E 회귀27 세미나');
+  assert.equal(result.applicationState.draft?.hangsaGbCode, '113');
+  assert.equal(result.applicationState.needs_application_collection, false);
 });
 
 test('buildApplicationState applies explicit eventName modification on existing draft', () => {
@@ -71,6 +270,144 @@ test('buildApplicationState applies explicit eventName modification on existing 
   assert.equal(result.applicationState.draft?.eventName, '운영위원회 회의');
   assert.equal(result.applicationState.draft?.purpose, '운영위원회 회의 진행');
   assert.equal(result.applicationState.source, 'user_modified');
+});
+
+test('buildApplicationState bounds multiple explicit field modifications by labels', () => {
+  const result = buildApplicationState({
+    history: [
+      { role: 'assistant', content: '어떤 항목을 바꿀까요? "행사명은 ..."처럼 말씀해 주세요.' },
+      {
+        role: 'user',
+        content:
+          '시간은 20시부터 1시간으로, 행사명은 E2E 테스트 다중수정 회의로 바꾸고 주관단체는 기능검증팀으로 바꿔줘',
+      },
+    ],
+    latestUserMessage:
+      '시간은 20시부터 1시간으로, 행사명은 E2E 테스트 다중수정 회의로 바꾸고 주관단체는 기능검증팀으로 바꿔줘',
+    baseIntent: 'new_reservation',
+    baseAssistantMessage: '가능한 공간을 찾아볼게요.',
+    filledSlots: baseSlots,
+    readyToSearch: true,
+    previousState: {
+      draft: {
+        hangsaGbCode: '111',
+        organization: '율전 학생회',
+        eventName: '율전 학생회관 E2E 테스트',
+        headcount: 30,
+        purpose: '율전 학생회관 E2E 테스트 진행',
+      },
+      missing_application: [],
+      needs_application_collection: false,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'high',
+        eventName: 'high',
+        purpose: 'medium',
+        hangsaGbCode: 'high',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.eventName, 'E2E 테스트 다중수정 회의');
+  assert.equal(result.applicationState.draft?.organization, '기능검증팀');
+  assert.equal(result.applicationState.draft?.purpose, 'E2E 테스트 다중수정 회의 진행');
+});
+
+test('buildApplicationState applies bare headcount correction on existing draft', () => {
+  const result = buildApplicationState({
+    history: [
+      { role: 'user', content: '7월 28일 19시부터 2시간 15명 율전 학생회관 E2E 테스트 정정 회의실 잡아줘' },
+      { role: 'assistant', content: '7/28(화) 19:00부터 2시간, 15명으로 가능한 공간을 찾아볼게요.' },
+      { role: 'user', content: '아니 30명으로' },
+    ],
+    latestUserMessage: '아니 30명으로',
+    baseIntent: 'modify_slot',
+    baseAssistantMessage: '인원을 30명으로 수정했어요.',
+    filledSlots: {
+      ...baseSlots,
+      date: '2026-07-28',
+      start_time: '19:00',
+      duration_min: 120,
+      headcount: 15,
+    },
+    readyToSearch: true,
+    previousState: {
+      draft: {
+        hangsaGbCode: '111',
+        organization: '율전 학생회관 E2E 테스트 동아리',
+        eventName: '율전 학생회관 E2E 테스트 동아리',
+        headcount: 15,
+        purpose: '율전 학생회관 E2E 테스트 동아리 진행',
+      },
+      missing_application: [],
+      needs_application_collection: false,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'high',
+        eventName: 'medium',
+        purpose: 'medium',
+        hangsaGbCode: 'high',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.headcount, 30);
+  assert.equal(result.applicationState.draft?.eventName, '율전 학생회관 E2E 테스트 동아리');
+  assert.equal(result.applicationState.source, 'user_modified');
+});
+
+test('buildApplicationState preserves slot headcount correction in application draft', () => {
+  const result = buildApplicationState({
+    history: [
+      { role: 'user', content: '9월 25일 19시부터 2시간 15명 율전 학생회관' },
+      { role: 'assistant', content: '9/25(금) 19:00부터 2시간, 15명으로 가능한 공간을 찾아볼게요.' },
+      { role: 'user', content: '아니 30명으로' },
+    ],
+    latestUserMessage: '아니 30명으로',
+    baseIntent: 'modify_slot',
+    baseAssistantMessage: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
+    filledSlots: {
+      ...baseSlots,
+      date: '2026-09-25',
+      start_time: '19:00',
+      duration_min: 120,
+      headcount: 30,
+    },
+    readyToSearch: true,
+    previousState: {
+      draft: {
+        hangsaGbCode: '111',
+        organization: '율전 학생회',
+        eventName: '율전 학생회관',
+        headcount: 15,
+        purpose: '율전 학생회관 진행',
+      },
+      missing_application: [],
+      needs_application_collection: false,
+      suggested_memory: null,
+      recommendation: null,
+      confidence: {
+        organization: 'high',
+        eventName: 'medium',
+        purpose: 'medium',
+        hangsaGbCode: 'high',
+      },
+      source: 'conversation',
+    },
+    memories: [],
+  });
+
+  assert.equal(result.intent, 'modify_application');
+  assert.equal(result.applicationState.draft?.headcount, 30);
+  assert.equal(result.applicationState.draft?.eventName, '율전 학생회관');
 });
 
 test('buildApplicationState does not suggest for single memory without reuse signal', () => {

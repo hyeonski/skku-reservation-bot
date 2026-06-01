@@ -351,10 +351,36 @@ declare global {
     );
   }
 
+  function byVisibleIdSuffix(suffix: string): HTMLElement | null {
+    return Array.from(
+      document.querySelectorAll<HTMLElement>(
+        `[id$=".${suffix}"]:not([id$=":icontext"])`,
+      ),
+    ).find(isVisible) ?? null;
+  }
+
   function byPopupSuffix(suffix: string): HTMLElement | null {
     return document.querySelector<HTMLElement>(
       `div[id^="${popupPrefix()}"][id$=".${suffix}"]:not([id$=":icontext"])`,
     );
+  }
+
+  function renderedValueFromRoot(root: HTMLElement | null): string {
+    if (!root) return '';
+    const controls = Array.from(
+      root.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea'),
+    ).filter(isVisible);
+    const rootControl = controls[0] ?? null;
+    if (rootControl) {
+      const value = controlValue(rootControl);
+      if (value) return value;
+    }
+    const textNodes = Array.from(
+      root.querySelectorAll<HTMLElement>('[id$=":text"], [id*=":text"]'),
+    ).filter(isVisible);
+    const textEl = textNodes[0] ?? null;
+    if (textEl) return controlValue(textEl);
+    return isVisible(root) ? controlValue(root) : '';
   }
 
   function renderedValueForSuffix(suffix: string): string {
@@ -369,13 +395,45 @@ declare global {
       const value = controlValue(labeledControl);
       if (value) return value;
     }
-    if (!root) return '';
-    const textNodes = Array.from(
-      root.querySelectorAll<HTMLElement>('[id$=":text"], [id*=":text"]'),
-    ).filter(isVisible);
-    const textEl = textNodes[0] ?? null;
-    if (textEl) return controlValue(textEl);
-    return isVisible(root) ? controlValue(root) : '';
+    return renderedValueFromRoot(root);
+  }
+
+  function visibleRenderedValueForSuffix(suffix: string): string {
+    const root = byVisibleIdSuffix(suffix);
+    const rootValue = renderedValueFromRoot(root);
+    if (rootValue) return rootValue;
+    const labeledControl = labeledControlForSuffix(suffix);
+    return labeledControl ? controlValue(labeledControl) : '';
+  }
+
+  function readVisibleFormSnapshot(): Record<string, string> {
+    return {
+      campusCode: '',
+      campusText: visibleRenderedValueForSuffix('cboCampusCd'),
+      buildingNo: '',
+      buildingText: visibleRenderedValueForSuffix('cboBuildCd'),
+      spaceCode: '',
+      spaceText: visibleRenderedValueForSuffix('cboSpaceCd'),
+      date: visibleRenderedValueForSuffix('calUseDt').replace(/\./g, '-'),
+      dateRendered: visibleRenderedValueForSuffix('calUseDt'),
+      startTime: '',
+      startText: visibleRenderedValueForSuffix('cboResStTime'),
+      startRendered: visibleRenderedValueForSuffix('cboResStTime'),
+      endTime: '',
+      endText: visibleRenderedValueForSuffix('cboResEdTime'),
+      endRendered: visibleRenderedValueForSuffix('cboResEdTime'),
+      hangsaGbCode: '',
+      hangsaRendered: visibleRenderedValueForSuffix('cboHangsaGb'),
+      organization: visibleRenderedValueForSuffix('edtSinchungGroup'),
+      organizationRendered: visibleRenderedValueForSuffix('edtSinchungGroup'),
+      eventName: visibleRenderedValueForSuffix('edtSinchungEvent'),
+      eventNameRendered: visibleRenderedValueForSuffix('edtSinchungEvent'),
+      headcount: visibleRenderedValueForSuffix('edtUseNum'),
+      headcountRendered: visibleRenderedValueForSuffix('edtUseNum'),
+      purpose: visibleRenderedValueForSuffix('TextArea00'),
+      purposeRendered: visibleRenderedValueForSuffix('TextArea00'),
+      blockingAlert: readBlockingAlertText(),
+    };
   }
 
   function renderedTargetsForSuffix(
@@ -1542,34 +1600,38 @@ declare global {
 
     /** 제출 직전 검증용 snapshot. popup success 문구보다 이 값을 신뢰한다. */
     readFormSnapshot: (): Record<string, string> => {
-      const dm = activeModalDM();
-      return {
-        campusCode: String(dm.cboCampusCd?.value ?? ''),
-        campusText: String(dm.cboCampusCd?.text ?? ''),
-        buildingNo: String(dm.cboBuildCd?.value ?? ''),
-        buildingText: String(dm.cboBuildCd?.text ?? ''),
-        spaceCode: String(dm.cboSpaceCd?.value ?? ''),
-        spaceText: String(dm.cboSpaceCd?.text ?? ''),
-        date: String(dm.calUseDt?.value ?? ''),
-        dateRendered: renderedValueForSuffix('calUseDt'),
-        startTime: String(dm.cboResStTime?.value ?? ''),
-        startText: String(dm.cboResStTime?.text ?? ''),
-        startRendered: renderedValueForSuffix('cboResStTime'),
-        endTime: String(dm.cboResEdTime?.value ?? ''),
-        endText: String(dm.cboResEdTime?.text ?? ''),
-        endRendered: renderedValueForSuffix('cboResEdTime'),
-        hangsaGbCode: String(dm.cboHangsaGb?.value ?? ''),
-        hangsaRendered: renderedValueForSuffix('cboHangsaGb'),
-        organization: String(dm.edtSinchungGroup?.value ?? ''),
-        organizationRendered: renderedValueForSuffix('edtSinchungGroup'),
-        eventName: String(dm.edtSinchungEvent?.value ?? ''),
-        eventNameRendered: renderedValueForSuffix('edtSinchungEvent'),
-        headcount: String(dm.edtUseNum?.value ?? ''),
-        headcountRendered: renderedValueForSuffix('edtUseNum'),
-        purpose: String(dm.TextArea00?.value ?? ''),
-        purposeRendered: renderedValueForSuffix('TextArea00'),
-        blockingAlert: readBlockingAlertText(),
-      };
+      try {
+        const dm = activeModalDM();
+        return {
+          campusCode: String(dm.cboCampusCd?.value ?? ''),
+          campusText: String(dm.cboCampusCd?.text ?? ''),
+          buildingNo: String(dm.cboBuildCd?.value ?? ''),
+          buildingText: String(dm.cboBuildCd?.text ?? ''),
+          spaceCode: String(dm.cboSpaceCd?.value ?? ''),
+          spaceText: String(dm.cboSpaceCd?.text ?? ''),
+          date: String(dm.calUseDt?.value ?? ''),
+          dateRendered: renderedValueForSuffix('calUseDt'),
+          startTime: String(dm.cboResStTime?.value ?? ''),
+          startText: String(dm.cboResStTime?.text ?? ''),
+          startRendered: renderedValueForSuffix('cboResStTime'),
+          endTime: String(dm.cboResEdTime?.value ?? ''),
+          endText: String(dm.cboResEdTime?.text ?? ''),
+          endRendered: renderedValueForSuffix('cboResEdTime'),
+          hangsaGbCode: String(dm.cboHangsaGb?.value ?? ''),
+          hangsaRendered: renderedValueForSuffix('cboHangsaGb'),
+          organization: String(dm.edtSinchungGroup?.value ?? ''),
+          organizationRendered: renderedValueForSuffix('edtSinchungGroup'),
+          eventName: String(dm.edtSinchungEvent?.value ?? ''),
+          eventNameRendered: renderedValueForSuffix('edtSinchungEvent'),
+          headcount: String(dm.edtUseNum?.value ?? ''),
+          headcountRendered: renderedValueForSuffix('edtUseNum'),
+          purpose: String(dm.TextArea00?.value ?? ''),
+          purposeRendered: renderedValueForSuffix('TextArea00'),
+          blockingAlert: readBlockingAlertText(),
+        };
+      } catch (_) {
+        return readVisibleFormSnapshot();
+      }
     },
   };
 

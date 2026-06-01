@@ -111,10 +111,21 @@ function deriveFloorLabel(roomName: string, code: string): string | undefined {
 
 function adaptSlots(slots: import('../shared/types').FilledSlots | null): RecommendationSlots {
   if (!slots) return { date: '', start: '', end: '' };
+  const end = (() => {
+    if (slots.end_time) return slots.end_time;
+    if (!slots.start_time || slots.duration_min == null) return '';
+    const [hRaw, mRaw] = slots.start_time.split(':');
+    const startMin = Number.parseInt(hRaw ?? '', 10) * 60 + Number.parseInt(mRaw ?? '', 10);
+    if (!Number.isFinite(startMin)) return '';
+    const endMin = (startMin + slots.duration_min) % (24 * 60);
+    const eh = String(Math.floor(endMin / 60)).padStart(2, '0');
+    const em = String(endMin % 60).padStart(2, '0');
+    return `${eh}:${em}`;
+  })();
   return {
     date: slots.date ?? '',
     start: slots.start_time ?? '',
-    end: slots.end_time ?? '',
+    end,
   };
 }
 
@@ -214,6 +225,24 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     setDraftSnapshots([]);
     lastCandidatesRef.current = null;
   }, [state.conversationId]);
+
+  useEffect(() => {
+    if (
+      state.automationStatus.kind === 'idle' &&
+      state.candidates.length === 0 &&
+      !state.proposedCandidate &&
+      state.submitStep === null
+    ) {
+      setSearchSnapshots([]);
+      setDraftSnapshots([]);
+      lastCandidatesRef.current = null;
+    }
+  }, [
+    state.automationStatus.kind,
+    state.candidates.length,
+    state.proposedCandidate,
+    state.submitStep,
+  ]);
 
   useEffect(() => {
     if (state.candidates.length === 0) return;

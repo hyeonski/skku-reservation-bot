@@ -23,6 +23,7 @@ import type {
   FilledSlots,
   Intent,
   ApplicationState,
+  ParseResult,
   ReservationFormData,
   ConversationSessionSummary,
   ConversationStatus,
@@ -80,6 +81,7 @@ const contexts = new Map<string, ConversationContext>();
 const pendingStarts = new Map<string, PendingStartRequest>();
 
 const SESSION_KEY = 'sw_contexts_v1';
+const MAX_RESERVATION_DURATION_MIN = 8 * 60;
 const rehydrationReady = (async () => {
   await rehydrateContexts();
   await gls.waitForQueuesRehydrated();
@@ -171,8 +173,184 @@ function isSearchReady(slots: FilledSlots | null | undefined): slots is FilledSl
   );
 }
 
+function emptyFilledSlots(): FilledSlots {
+  return {
+    date: null,
+    start_time: null,
+    end_time: null,
+    duration_min: null,
+    headcount: null,
+    campus: null,
+    building: null,
+    space: null,
+  };
+}
+
+function hasAnyFilledSlot(slots: FilledSlots | null | undefined): boolean {
+  if (!slots) return false;
+  return Boolean(
+    slots.date ||
+      slots.start_time ||
+      slots.end_time ||
+      slots.duration_min != null ||
+      slots.headcount != null ||
+      slots.campus ||
+      slots.building ||
+      slots.space,
+  );
+}
+
+function preservePreviousSlotContext(
+  result: ParseResult,
+  previousSlots: FilledSlots | null,
+): ParseResult {
+  if (!previousSlots) return result;
+  if (
+    result.intent === 'cancel' ||
+    hasAnyFilledSlot(result.filled_slots) ||
+    !hasAnyFilledSlot(previousSlots)
+  ) {
+    return result;
+  }
+
+  return {
+    ...result,
+    filled_slots: previousSlots,
+    ready_to_search: false,
+  };
+}
+
+function emptyApplicationState(): ApplicationState {
+  return {
+    draft: null,
+    missing_application: ['organization', 'eventName', 'purpose', 'hangsaGbCode'],
+    needs_application_collection: true,
+    suggested_memory: null,
+    recommendation: null,
+    confidence: {
+      organization: 'low',
+      eventName: 'low',
+      purpose: 'low',
+      hangsaGbCode: 'low',
+    },
+    source: null,
+  };
+}
+
+function mostlyEnglishReservationRequest(text: string): boolean {
+  const latinLetters = text.match(/[A-Za-z]/g)?.length ?? 0;
+  const hangulLetters = text.match(/\p{Script=Hangul}/gu)?.length ?? 0;
+  if (latinLetters < 8) return false;
+  if (hangulLetters === 0) return true;
+  return /\b(?:book|reserve|reservation|room|meeting|people|person|pm|am)\b/i.test(text) &&
+    latinLetters > hangulLetters;
+}
+
+function hasUnsupportedFacilityCondition(text: string): boolean {
+  return /빔\s*프로젝터|프로젝터|화이트\s*보드|칠판|마이크|스피커|모니터|컴퓨터|\bpc\b|콘센트|hdmi|음향|장비/i.test(
+    text,
+  );
+}
+
+function hasRepeatReservationCondition(text: string): boolean {
+  return /매주|매달|매월|매일|격주|반복|정기적으로|이번\s*달.*(?:매주|매일)/.test(text);
+}
+
+function asksToChangeSubmittedReservation(text: string): boolean {
+  if (!/(예약|신청)/.test(text)) return false;
+  if (!/(취소|변경|수정)/.test(text)) return false;
+  return /(방금|이미|완료|제출|저장|신청한|예약한|했던|지난번|이전)/.test(text);
+}
+
+function asksForCandidateList(text: string): boolean {
+  return /(여러\s*개|후보.*(?:목록|리스트|비교)|비교해서|같이\s*보여)/.test(text);
+}
+
+function applyChatSafetyOverride(
+  result: ParseResult,
+  latestMessage: string,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (mostlyEnglishReservationRequest(latestMessage)) {
+    return {
+      ...result,
+      filled_slots: emptyFilledSlots(),
+      missing_required: ['headcount', 'date', 'start_time', 'end_time'],
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message:
+        '현재는 한국어 예약 요청만 안정적으로 처리할 수 있어요. 날짜, 시간, 인원을 한국어로 다시 알려주세요.',
+      application_state: previousApplicationState ?? emptyApplicationState(),
+    };
+  }
+
+  if (hasRepeatReservationCondition(latestMessage)) {
+    return {
+      ...result,
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message:
+        '반복 예약은 아직 자동으로 처리하지 않아요. 안전하게 진행하려면 한 번에 하나의 날짜와 시간만 알려주세요.',
+      application_state: previousApplicationState ?? result.application_state,
+    };
+  }
+
+  if (hasUnsupportedFacilityCondition(latestMessage)) {
+    return {
+      ...result,
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message:
+        '빔프로젝터, 화이트보드 같은 시설·장비 조건은 아직 GLS에서 자동 확인할 수 없어요. 날짜, 시간, 인원 기준으로만 찾을 수 있습니다.',
+      application_state: previousApplicationState ?? result.application_state,
+    };
+  }
+
+  if (asksToChangeSubmittedReservation(latestMessage)) {
+    return {
+      ...result,
+      intent: 'out_of_scope',
+      ready_to_search: false,
+      assistant_message:
+        '이미 저장되거나 제출된 예약의 취소·변경은 이 확장에서 대신 처리하지 않아요. GLS 화면에서 직접 확인해 주세요.',
+      application_state: previousApplicationState ?? result.application_state,
+    };
+  }
+
+  return result;
+}
+
 function formatHour(h: number): string {
   return `${String(h).padStart(2, '0')}:00`;
+}
+
+function timeToMinutes(time: string | null): number | null {
+  if (!time) return null;
+  const match = time.match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  const hour = Number.parseInt(match[1] ?? '', 10);
+  const minute = Number.parseInt(match[2] ?? '', 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  return hour * 60 + minute;
+}
+
+function minutesToTime(minutes: number): string {
+  const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
+  return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(
+    normalized % 60,
+  ).padStart(2, '0')}`;
+}
+
+function parseKoreanClock(text: string): string | null {
+  const match = text.match(/(?:오전|오후)?\s*(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?/);
+  if (!match?.[1]) return null;
+  let hour = Number.parseInt(match[1], 10);
+  const minute = Number.parseInt(match[2] ?? '0', 10);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  if (/오후/.test(match[0]) && hour < 12) hour += 12;
+  if (/오전/.test(match[0]) && hour === 12) hour = 0;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
 function addDaysToIso(date: string, days: number): string {
@@ -230,6 +408,189 @@ function applyRetrySlotAdjustment(base: FilledSlots | null, text: string): Fille
 
   if (!changed) return null;
   return next;
+}
+
+function extractHeadcountRangeUpper(text: string): number | null {
+  const normalized = text.replace(/,/g, '');
+  const matches = [
+    normalized.match(/(\d+)\s*(?:명)?\s*[-–~]\s*(\d+)\s*명/),
+    normalized.match(/(\d+)\s*명\s*(?:에서|부터)\s*(\d+)\s*명/),
+  ];
+  const match = matches.find(Boolean);
+  if (!match) return null;
+
+  const first = Number.parseInt(match[1] ?? '', 10);
+  const second = Number.parseInt(match[2] ?? '', 10);
+  if (!Number.isFinite(first) || !Number.isFinite(second)) return null;
+  const upper = Math.max(first, second);
+  return upper > 0 ? upper : null;
+}
+
+function extractLatestHeadcountRangeUpper(
+  history: ChatMessage[],
+  latestMessage: string,
+): number | null {
+  const userTexts = history
+    .filter((message) => message.role === 'user')
+    .map((message) => message.content);
+  if (userTexts[userTexts.length - 1] !== latestMessage) {
+    userTexts.push(latestMessage);
+  }
+
+  for (let i = userTexts.length - 1; i >= 0; i -= 1) {
+    const text = userTexts[i] ?? '';
+    const upper = extractHeadcountRangeUpper(text);
+    if (upper != null) return upper;
+    if (/\d+\s*명/.test(text)) return null;
+  }
+  return null;
+}
+
+function applyHeadcountRangeOverride(result: ParseResult, upper: number | null): ParseResult {
+  if (upper == null || result.filled_slots.headcount === upper) return result;
+
+  const previous = result.filled_slots.headcount;
+  const filledSlots = {
+    ...result.filled_slots,
+    headcount: upper,
+  };
+  const missingRequired = result.missing_required.filter((field) => field !== 'headcount');
+  const assistantMessage =
+    previous != null
+      ? result.assistant_message.replace(new RegExp(`${previous}\\s*명`, 'g'), `${upper}명`)
+      : result.assistant_message;
+
+  return {
+    ...result,
+    filled_slots: filledSlots,
+    missing_required: missingRequired,
+    ready_to_search: isSearchReady(filledSlots),
+    assistant_message: assistantMessage,
+    application_state: {
+      ...result.application_state,
+      draft: applyHeadcountToDraft(result.application_state.draft, upper),
+    },
+  };
+}
+
+function applySlotCorrection(base: FilledSlots | null, text: string): FilledSlots | null {
+  if (!base) return null;
+  const normalized = text.trim();
+  const headcountMatch = normalized.match(
+    /^(?:아니(?:요)?\s*)?(?:인원(?:은|을|는)?\s*)?(\d+)\s*명(?:으로)?\s*(?:(?:바꿔?|변경|수정)(?:해줘|해주세요)?)?$/,
+  );
+  if (!headcountMatch) return null;
+
+  const headcount = Number.parseInt(headcountMatch[1] ?? '', 10);
+  if (!Number.isFinite(headcount) || headcount <= 0 || headcount === base.headcount) {
+    return null;
+  }
+
+  return {
+    ...base,
+    headcount,
+  };
+}
+
+function applyInlineSlotEdits(base: FilledSlots | null, text: string): FilledSlots | null {
+  if (!base) return null;
+  const normalized = text.trim();
+  if (!/(바꾸|변경|수정|아니)/.test(normalized)) {
+    return null;
+  }
+
+  const next: FilledSlots = { ...base };
+  let changed = false;
+  let explicitSlotValue = false;
+
+  const headcountMatch = normalized.match(/(\d+)\s*명/);
+  if (headcountMatch?.[1]) {
+    const headcount = Number.parseInt(headcountMatch[1], 10);
+    if (Number.isFinite(headcount) && headcount > 0) {
+      explicitSlotValue = true;
+      if (headcount !== next.headcount) {
+        next.headcount = headcount;
+        changed = true;
+      }
+    }
+  }
+
+  const rangeMatch = normalized.match(
+    /(\d{1,2})\s*시(?!간)(?:\s*\d{1,2}\s*분)?\s*(?:부터|[-–~])\s*(\d{1,2})\s*시(?!간)/,
+  );
+  if (rangeMatch?.[1] && rangeMatch[2]) {
+    const start = parseKoreanClock(`${rangeMatch[1]}시`);
+    const end = parseKoreanClock(`${rangeMatch[2]}시`);
+    const startMin = timeToMinutes(start);
+    const endMin = timeToMinutes(end);
+    if (start && end && startMin != null && endMin != null && endMin > startMin) {
+      explicitSlotValue = true;
+      if (
+        next.start_time !== start ||
+        next.end_time !== end ||
+        next.duration_min !== endMin - startMin
+      ) {
+        next.start_time = start;
+        next.end_time = end;
+        next.duration_min = endMin - startMin;
+        changed = true;
+      }
+    }
+  } else {
+    const startMatch = normalized.match(
+      /(?:시간(?:은|을|는)?\s*)?((?:오전|오후)?\s*\d{1,2}\s*시(?!간)(?:\s*\d{1,2}\s*분)?)(?:\s*부터)?/,
+    );
+    const start = startMatch?.[1] ? parseKoreanClock(startMatch[1]) : null;
+    if (start) {
+      explicitSlotValue = true;
+      if (start !== next.start_time) {
+        next.start_time = start;
+        changed = true;
+      }
+    }
+  }
+
+  const durationMatch = normalized.match(/(\d+)\s*시간/);
+  if (durationMatch?.[1]) {
+    const hours = Number.parseInt(durationMatch[1], 10);
+    if (Number.isFinite(hours) && hours > 0) {
+      explicitSlotValue = true;
+      if (next.duration_min !== hours * 60) {
+        next.duration_min = hours * 60;
+        changed = true;
+      }
+    }
+  }
+
+  const startMin = timeToMinutes(next.start_time);
+  if (startMin != null && next.duration_min != null) {
+    const endTime = minutesToTime(startMin + next.duration_min);
+    if (endTime !== next.end_time) {
+      next.end_time = endTime;
+      changed = true;
+    }
+  }
+
+  return changed || explicitSlotValue ? next : null;
+}
+
+function applyHeadcountToDraft(
+  draft: ReservationFormData | null,
+  headcount: number | null,
+): ReservationFormData | null {
+  if (!draft || headcount == null) return draft;
+  return {
+    ...draft,
+    headcount,
+  };
+}
+
+function candidateSupportsHeadcount(
+  candidate: import('../shared/types').SpaceCandidate | null,
+  headcount: number | null,
+): boolean {
+  if (!candidate || headcount == null) return false;
+  return candidate.capacityMin <= headcount && headcount <= candidate.capacityMax;
 }
 
 async function loadConversationIndex(): Promise<ConversationSessionSummary[]> {
@@ -425,6 +786,39 @@ function deriveEndTime(slots: FilledSlots | null | undefined): string | null {
   const eh = String(Math.floor(endMin / 60)).padStart(2, '0');
   const em = String(endMin % 60).padStart(2, '0');
   return `${eh}:${em}`;
+}
+
+function normalizeSlotEndTime(slots: FilledSlots): FilledSlots {
+  if (slots.end_time) return slots;
+  const endTime = deriveEndTime(slots);
+  return endTime ? { ...slots, end_time: endTime } : slots;
+}
+
+function getSlotDurationMinutes(slots: FilledSlots | null | undefined): number | null {
+  if (!slots) return null;
+  if (slots.duration_min != null) return slots.duration_min;
+  const startMin = timeToMinutes(slots.start_time);
+  const endMin = timeToMinutes(slots.end_time);
+  if (startMin == null || endMin == null) return null;
+  const delta = endMin >= startMin ? endMin - startMin : endMin + 24 * 60 - startMin;
+  return delta > 0 ? delta : null;
+}
+
+function applyDurationLimitOverride(
+  result: ParseResult,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  const durationMin = getSlotDurationMinutes(result.filled_slots);
+  if (durationMin == null || durationMin <= MAX_RESERVATION_DURATION_MIN) return result;
+  const hours = Math.round((durationMin / 60) * 10) / 10;
+  return {
+    ...result,
+    intent: 'out_of_scope',
+    ready_to_search: false,
+    missing_required: [],
+    assistant_message: `한 번에 ${hours}시간 예약은 제한을 넘을 수 있어요. 안전하게 진행하려면 최대 8시간 이내로 나누거나 시간을 줄여서 요청해 주세요.`,
+    application_state: previousApplicationState ?? result.application_state,
+  };
 }
 
 function resolveSearchSlots(ctx: ConversationContext): {
@@ -813,14 +1207,109 @@ async function handleChatRequest(
   const ctx = getOrCreateContext(msg.conversationId);
   const previousDraft = ctx.applicationState?.draft ?? null;
   const previousSlots = ctx.lastFilledSlots;
+  const parsedDraftCommand = parseModification(msg.latestMessage);
   // Trust the popup's history snapshot (clientside authority — D-018).
   ctx.history = msg.history;
 
-  const result = await apiClient.parse({
+  if (parsedDraftCommand.intent === 'cancel') {
+    gls.clearQueue(msg.conversationId);
+    pendingStarts.delete(msg.conversationId);
+    const applicationState = emptyApplicationState();
+    const result: ParseResult = {
+      conversation_id: msg.conversationId,
+      filled_slots: emptyFilledSlots(),
+      missing_required: [],
+      intent: 'cancel',
+      ready_to_search: false,
+      assistant_message: '예약 진행을 중단했어요. 필요하면 새 대화로 다시 시작할 수 있어요.',
+      application_state: applicationState,
+    };
+
+    ctx.pendingStart = null;
+    ctx.lastProposed = null;
+    ctx.lastStatus = { kind: 'idle' };
+    ctx.conversationStatus = 'abandoned_user';
+    ctx.confirmedReservationLabel = null;
+    ctx.confirmedSpaceCode = null;
+    ctx.confirmedSpaceLabel = null;
+    ctx.updatedAt = new Date().toISOString();
+    ctx.lastIntent = 'cancel';
+    ctx.lastFilledSlots = result.filled_slots;
+    ctx.applicationState = applicationState;
+    syncApplicationDraftToAutomation(ctx, applicationState.draft);
+
+    const assistantMessageTs = new Date().toISOString();
+    const historyWithAssistant: import('../shared/types').ChatMessage[] = [
+      ...msg.history,
+      { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
+    ];
+    ctx.history = historyWithAssistant;
+    void persistContexts();
+    void syncConversationSummaryFromContext(ctx);
+    void mirrorConversation(msg.conversationId, {
+      history: historyWithAssistant,
+      status: 'abandoned_user',
+      lastIntent: result.intent,
+      lastFilledSlots: result.filled_slots,
+      lastApplicationState: result.application_state,
+      confirmedReservationLabel: null,
+      confirmedSpaceCode: null,
+      confirmedSpaceLabel: null,
+    }, '[SW] cancelConversation mirror failed:');
+
+    return { type: 'BG_CHAT_RESPONSE', result };
+  }
+
+  if (parsedDraftCommand.intent === 'alternative') {
+    const result: ParseResult = {
+      conversation_id: msg.conversationId,
+      filled_slots: previousSlots ?? emptyFilledSlots(),
+      missing_required: [],
+      intent: 'request_alternative',
+      ready_to_search: false,
+      assistant_message: asksForCandidateList(msg.latestMessage)
+        ? '후보를 길게 나열하지 않고 한 곳씩 보여드려요. 같은 조건으로 다음 공간을 찾아볼게요.'
+        : '같은 조건으로 다른 공간을 찾아볼게요.',
+      application_state: ctx.applicationState ?? emptyApplicationState(),
+    };
+
+    ctx.updatedAt = new Date().toISOString();
+    ctx.lastIntent = 'request_alternative';
+    ctx.lastFilledSlots = result.filled_slots;
+    ctx.applicationState = result.application_state;
+
+    const assistantMessageTs = new Date().toISOString();
+    const historyWithAssistant: import('../shared/types').ChatMessage[] = [
+      ...msg.history,
+      { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
+    ];
+    ctx.history = historyWithAssistant;
+    void persistContexts();
+    void syncConversationSummaryFromContext(ctx);
+    void mirrorConversation(msg.conversationId, {
+      history: historyWithAssistant,
+      status: ctx.conversationStatus,
+      lastIntent: result.intent,
+      lastFilledSlots: result.filled_slots,
+      lastApplicationState: result.application_state,
+      confirmedReservationLabel: ctx.confirmedReservationLabel,
+      confirmedSpaceCode: ctx.confirmedSpaceCode,
+      confirmedSpaceLabel: ctx.confirmedSpaceLabel,
+    }, '[SW] alternativeConversation mirror failed:');
+
+    return { type: 'BG_CHAT_RESPONSE', result };
+  }
+
+  let result = await apiClient.parse({
     conversationId: msg.conversationId,
     history: msg.history,
-    now: new Date().toISOString(),
+    now: apiClient.localOffsetIso(),
   });
+  result = applyHeadcountRangeOverride(
+    result,
+    extractLatestHeadcountRangeUpper(msg.history, msg.latestMessage),
+  );
+  result = preservePreviousSlotContext(result, previousSlots);
 
   if (
     ctx.lastStatus.kind === 'no_candidate' &&
@@ -839,7 +1328,74 @@ async function handleChatRequest(
     }
   }
 
-  const parsedDraftCommand = parseModification(msg.latestMessage);
+  const slotEditBase = previousSlots ?? result.filled_slots;
+  const slotCorrection = applySlotCorrection(slotEditBase, msg.latestMessage);
+  if (slotCorrection) {
+    const canReuseCurrentCandidate = candidateSupportsHeadcount(
+      ctx.lastProposed,
+      slotCorrection.headcount,
+    );
+    result = {
+      ...result,
+      intent: 'modify_slot',
+      filled_slots: slotCorrection,
+      ready_to_search: canReuseCurrentCandidate ? false : isSearchReady(slotCorrection),
+      missing_required: canReuseCurrentCandidate || isSearchReady(slotCorrection)
+        ? []
+        : result.missing_required,
+      assistant_message: canReuseCurrentCandidate
+        ? `인원을 ${slotCorrection.headcount}명으로 바꿨어요. 현재 추천 공간 정원 범위 안이라 같은 공간으로 이어갈 수 있어요.`
+        : `인원을 ${slotCorrection.headcount}명으로 바꿨어요. 같은 날짜와 시간으로 다시 확인할게요.`,
+      application_state: {
+        ...result.application_state,
+        draft: applyHeadcountToDraft(
+          result.application_state.draft ?? previousDraft,
+          slotCorrection.headcount,
+        ),
+        suggested_memory: null,
+        recommendation: null,
+        source: result.application_state.draft || previousDraft
+          ? 'user_modified'
+          : result.application_state.source,
+      },
+    };
+  }
+
+  if (!slotCorrection) {
+    const inlineSlotEditBase = previousSlots ?? (result.intent === 'modify_slot' ? result.filled_slots : null);
+    const inlineSlotEdits = applyInlineSlotEdits(inlineSlotEditBase, msg.latestMessage);
+    if (inlineSlotEdits) {
+      result = {
+        ...result,
+        intent: 'modify_slot',
+        filled_slots: inlineSlotEdits,
+        ready_to_search: isSearchReady(inlineSlotEdits),
+        missing_required: isSearchReady(inlineSlotEdits) ? [] : result.missing_required,
+        assistant_message: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
+        application_state: {
+          ...result.application_state,
+          draft: applyHeadcountToDraft(
+            result.application_state.draft ?? previousDraft,
+            inlineSlotEdits.headcount,
+          ),
+          suggested_memory: null,
+          recommendation: null,
+          source: result.application_state.draft || previousDraft
+            ? 'user_modified'
+            : result.application_state.source,
+        },
+      };
+    }
+  }
+
+  result = applyChatSafetyOverride(result, msg.latestMessage, ctx.applicationState);
+
+  result = {
+    ...result,
+    filled_slots: normalizeSlotEndTime(result.filled_slots),
+  };
+  result = applyDurationLimitOverride(result, ctx.applicationState);
+
   if (
     previousDraft &&
     (result.intent === 'modify_slot' ||

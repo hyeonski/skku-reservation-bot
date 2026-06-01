@@ -66,7 +66,8 @@ export const SYSTEM_PROMPT = `당신은 성균관대 GLS 공간예약 시스템�
    - intent 가 out_of_scope 이면 공간예약 도우미임을 알리고 본 주제로 유도한다.
    - intent 가 cancel 이면 중단을 확인한다.
 5. history 의 이전 turn 에서 추출된 슬롯은 사용자가 새 발화로 명시적으로 바꾸지 않는 한 그대로 유지한다.
-6. JSON 이외의 텍스트(설명·마크다운 코드 펜스 등)를 출력하지 않는다.`;
+6. "회의실 잡아줘", "강의실 찾아줘", "공간 예약해줘"처럼 일반 공간 유형/요청 표현은 space 슬롯에 넣지 않는다. space 는 "31306B", "박찬 첨단강의실", "공과대학 세미나실1"처럼 특정 호실/공간명을 직접 말한 경우에만 채운다.
+7. JSON 이외의 텍스트(설명·마크다운 코드 펜스 등)를 출력하지 않는다.`;
 
 export const TITLE_SYSTEM_PROMPT = `당신은 성균관대 GLS 공간예약 대화의 세션 제목 생성기다.
 사용자가 나중에 최근 대화 목록에서 바로 알아볼 수 있도록, 대화의 핵심 맥락만 짧은 한국어 제목으로 요약한다.
@@ -137,6 +138,26 @@ export const FEW_SHOT_EXAMPLES: FewShotExample[] = [
       intent: 'new_reservation',
       ready_to_search: true,
       assistant_message: '5/21(목) 14:00부터 2시간, 6명, 율전으로 가능한 공간을 찾아볼게요.',
+    },
+  },
+  {
+    now: '2026-05-12T14:30:00+09:00',
+    user: '다음 주 수요일 19시부터 2시간 15명 율전 학생회관 회의실 잡아줘',
+    assistant: {
+      filled_slots: {
+        date: '2026-05-20',
+        start_time: '19:00',
+        end_time: null,
+        duration_min: 120,
+        headcount: 15,
+        campus: '율전',
+        building: '학생회관',
+        space: null,
+      },
+      missing_required: [],
+      intent: 'new_reservation',
+      ready_to_search: true,
+      assistant_message: '5/20(수) 19:00부터 2시간, 15명, 율전 학생회관에서 가능한 공간을 찾아볼게요.',
     },
   },
   {

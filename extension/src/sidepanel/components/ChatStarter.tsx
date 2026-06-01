@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { ChatHeader } from './ChatHeader';
+import { ChatComposer } from './ChatComposer';
 
 interface ChatStarterProps {
   onSendStarter: (text: string) => void;
@@ -12,6 +14,14 @@ const EXAMPLES = [
 ];
 
 export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
+  const [value, setValue] = useState('');
+  const send = () => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    setValue('');
+    onSendStarter(trimmed);
+  };
+
   return (
     <div className="screen">
       <ChatHeader title="새 대화" onBack={onBack} />
@@ -46,6 +56,12 @@ export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
           </div>
         </div>
       </div>
+      <ChatComposer
+        value={value}
+        onChange={setValue}
+        onSend={send}
+        placeholder="예: 7월 21일 18시 20명 회의실"
+      />
     </div>
   );
 }
