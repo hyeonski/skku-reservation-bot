@@ -30,14 +30,20 @@ import {
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
+import {
+  clearTimeSlots,
+  crossesMidnight,
+  emptyFilledSlots,
+  hasAmbiguousBareMeridiemTime,
+  isBeyondFutureBookingWindow,
+  isSupportedReservationMinute,
+  usesUnsupportedReservationMinute,
+} from '../../../shared/reservation/slotPolicy.js';
 
 const ErrorResponse = z.object({
   error: z.string(),
   message: z.string().optional(),
 });
-
-const MAX_FUTURE_BOOKING_DAYS = 180;
-const SUPPORTED_TIME_MINUTES = new Set([0, 30]);
 
 function parseStoredFilledSlots(value: unknown): FilledSlotsType | null {
   const parsed = FilledSlots.safeParse(value);
@@ -45,16 +51,7 @@ function parseStoredFilledSlots(value: unknown): FilledSlotsType | null {
 }
 
 function makeEmptySlots(): FilledSlotsType {
-  return {
-    date: null,
-    start_time: null,
-    end_time: null,
-    duration_min: null,
-    headcount: null,
-    campus: null,
-    building: null,
-    space: null,
-  };
+  return emptyFilledSlots<FilledSlotsType>();
 }
 
 function isLikelyOutOfScopeSmallTalk(text: string): boolean {
@@ -89,14 +86,6 @@ function makeInvalidInputResult(message: string, missingRequired: string[] = [])
   };
 }
 
-function clearTimeSlots(slots: FilledSlotsType | null | undefined): FilledSlotsType {
-  return {
-    ...(slots ?? makeEmptySlots()),
-    start_time: null,
-    end_time: null,
-  };
-}
-
 function hasImpossibleHeadcount(text: string): boolean {
   const match = text.replace(/,/g, '').match(/(^|[^\d])(-?\d+)\s*명/);
   if (!match?.[2]) return false;
@@ -114,10 +103,6 @@ function hasImpossibleClock(text: string): boolean {
   return false;
 }
 
-function isSupportedReservationMinute(minute: number): boolean {
-  return SUPPORTED_TIME_MINUTES.has(minute);
-}
-
 function hasUnsupportedMinuteUnit(text: string): boolean {
   const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
   for (const match of matches) {
@@ -128,38 +113,9 @@ function hasUnsupportedMinuteUnit(text: string): boolean {
   return false;
 }
 
-function hasAmbiguousBareMeridiemTime(text: string): boolean {
-  const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
-  for (const match of matches) {
-    const hour = Number.parseInt(match[1] ?? '', 10);
-    if (!Number.isFinite(hour) || hour < 1 || hour > 12) continue;
-
-    const startIndex = match.index ?? 0;
-    const before = text.slice(Math.max(0, startIndex - 8), startIndex);
-    const segment = `${before}${match[0]}`;
-    if (/(오전|오후|아침|점심|낮|저녁|밤|새벽|정오|자정)/.test(segment)) {
-      continue;
-    }
-
-    return true;
-  }
-  return false;
-}
-
 function parseIsoDateOnly(value: string): string | null {
   const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
   return match?.[1] ?? null;
-}
-
-function isoDateToEpochDay(value: string): number | null {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match?.[1] || !match[2] || !match[3]) return null;
-  const year = Number.parseInt(match[1], 10);
-  const month = Number.parseInt(match[2], 10);
-  const day = Number.parseInt(match[3], 10);
-  const time = Date.UTC(year, month - 1, day);
-  if (Number.isNaN(time)) return null;
-  return Math.floor(time / 86_400_000);
 }
 
 function localMinutesFromIso(value: string): number | null {
@@ -189,16 +145,6 @@ function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMPa
     '지난 날짜나 이미 지난 시간으로는 예약할 수 없어요. 오늘 이후의 날짜와 시간을 다시 알려주세요.',
     ['date'],
   );
-}
-
-function isBeyondFutureBookingWindow(slots: FilledSlotsType, now: string): boolean {
-  if (!slots.date) return false;
-  const today = parseIsoDateOnly(now);
-  if (!today) return false;
-  const todayDay = isoDateToEpochDay(today);
-  const slotDay = isoDateToEpochDay(slots.date);
-  if (todayDay == null || slotDay == null) return false;
-  return slotDay - todayDay > MAX_FUTURE_BOOKING_DAYS;
 }
 
 function applyFutureBookingWindowOverride(result: LLMParseResult, now: string): LLMParseResult {
@@ -255,36 +201,12 @@ function applyStudentCenterCampusClarification(
   };
 }
 
-function crossesMidnight(slots: FilledSlotsType): boolean {
-  const startMinutes = timeToMinutes(slots.start_time);
-  const endMinutes = timeToMinutes(slots.end_time);
-  if (startMinutes != null && endMinutes != null && endMinutes <= startMinutes) {
-    return true;
-  }
-  if (startMinutes != null && slots.duration_min != null) {
-    return startMinutes + slots.duration_min >= 24 * 60;
-  }
-  return false;
-}
-
 function applySameDayTimeOverride(result: LLMParseResult): LLMParseResult {
   if (!crossesMidnight(result.filled_slots)) return result;
   return makeInvalidInputResult(
     '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
     ['start_time', 'end_time'],
   );
-}
-
-function usesUnsupportedReservationMinute(slots: FilledSlotsType): boolean {
-  const startMinutes = timeToMinutes(slots.start_time);
-  const endMinutes = timeToMinutes(slots.end_time);
-  if (startMinutes != null && !isSupportedReservationMinute(startMinutes % 60)) return true;
-  if (endMinutes != null && !isSupportedReservationMinute(endMinutes % 60)) return true;
-  if (startMinutes != null && slots.duration_min != null) {
-    const derivedEndMinute = (startMinutes + slots.duration_min) % 60;
-    return !isSupportedReservationMinute(derivedEndMinute);
-  }
-  return false;
 }
 
 function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {

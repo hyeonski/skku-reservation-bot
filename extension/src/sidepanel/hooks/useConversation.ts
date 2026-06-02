@@ -374,7 +374,7 @@ export function useConversation() {
       messages: [...s.messages, botMsg],
       parsing: false,
       slots:
-        parsed.intent === 'cancel'
+        parsed.intent === 'cancel' || parsed.intent === 'out_of_scope'
           ? null
           : parsed.intent === 'request_alternative'
             ? s.slots
