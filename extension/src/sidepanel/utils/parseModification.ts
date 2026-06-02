@@ -14,7 +14,7 @@ export type DraftCommand =
   | { intent: 'unknown' };
 
 const FIELD_LABEL_PATTERN =
-  '(?:행사명|주관\\s*단체|단체|사용\\s*목적|목적|행사\\s*인원|인원)';
+  '(?:행사명|행사\\s*구분|주관\\s*단체|단체|사용\\s*목적|목적|행사\\s*인원|인원)';
 
 function cleanEditValue(value: string): string {
   return value

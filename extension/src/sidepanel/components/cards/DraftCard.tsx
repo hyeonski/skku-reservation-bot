@@ -6,6 +6,7 @@ interface DraftCardProps {
   suggested?: DraftSuggestedFlags;
   submitting?: boolean;
   submitLocked?: boolean;
+  canSubmit?: boolean;
   onSubmit: () => void;
   onEdit: () => void;
   /** true 면 이전 draft 카드 (대체됨) — 흐림 처리, 본문 collapse, 액션 숨김. */
@@ -25,6 +26,7 @@ export function DraftCard({
   suggested = {},
   submitting = false,
   submitLocked = false,
+  canSubmit = true,
   onSubmit,
   onEdit,
   superseded = false,
@@ -64,7 +66,7 @@ export function DraftCard({
             type="button"
             className="btn primary small"
             onClick={onSubmit}
-            disabled={submitting || submitLocked || !draft.group || !draft.event}
+            disabled={submitting || submitLocked || !canSubmit}
           >
             {submitting ? '신청 저장 중…' : submitLocked ? '신청 저장 완료' : 'GLS 신청 저장'}
           </button>

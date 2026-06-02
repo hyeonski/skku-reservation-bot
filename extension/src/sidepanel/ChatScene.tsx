@@ -11,7 +11,7 @@
  *   no_candidate                    | SearchProgressCard frozen + NoSpaceCard
  *
  * 추가:
- *   applicationState.draft 완성 + proposedCandidate 있음 → DraftCard
+ *   applicationState.draft 있음 + proposedCandidate 있음 → DraftCard
  *   applicationState.suggested_memory 있음 + draft 아직 없음 → P2SuggestCard
  */
 
@@ -87,11 +87,13 @@ function adaptCandidates(
 }
 
 function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
+  const displayBuildingNo = normalizeBuildingNo(c.buildingNo, c.glsSpaceCode);
   return {
     code: c.glsSpaceCode,
     name: c.roomName,
     building: c.buildingName,
-    floor: deriveFloorLabel(c.roomName, c.glsSpaceCode),
+    buildingNo: displayBuildingNo,
+    floor: deriveFloorLabel(c.roomName, c.glsSpaceCode, displayBuildingNo),
     capa: `최대 ${c.capacityMax}명`,
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
     contents: c.contents,
@@ -99,9 +101,24 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
   };
 }
 
-function deriveFloorLabel(roomName: string, code: string): string | undefined {
+function normalizeBuildingNo(buildingNo: string | undefined, code: string): string | undefined {
+  if (!buildingNo) return undefined;
+  if (code.startsWith(buildingNo)) return buildingNo;
+  const withoutCampusPrefix = buildingNo.length === 3 ? buildingNo.slice(1) : buildingNo;
+  return code.startsWith(withoutCampusPrefix) ? withoutCampusPrefix : buildingNo;
+}
+
+function deriveFloorLabel(
+  roomName: string,
+  code: string,
+  buildingNo?: string,
+): string | undefined {
   const roomMatch = roomName.match(/(\d{3,4})\s*호/);
-  const raw = roomMatch?.[1] ?? (code.match(/^(\d{3,4})/)?.[1]);
+  const codeRoomPart =
+    buildingNo && code.startsWith(buildingNo)
+      ? code.slice(buildingNo.length).match(/^(\d{3,4})/)?.[1]
+      : undefined;
+  const raw = roomMatch?.[1] ?? codeRoomPart ?? code.match(/^(\d{3,4})/)?.[1];
   if (!raw) return undefined;
   const floor = raw.length >= 4 ? raw.slice(0, 2) : raw.slice(0, 1);
   const parsed = Number.parseInt(floor, 10);
@@ -216,9 +233,23 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
 
   const activeRecommendationValid = !!proposed && hasCompleteRecommendationSlots(state.slots);
   const showRecommendation = activeRecommendationValid;
+  const latestAlternativeNotice = useMemo(() => {
+    for (let i = state.messages.length - 1; i >= 0; i -= 1) {
+      const message = state.messages[i];
+      if (message?.role !== 'assistant') continue;
+      if (
+        message.content.includes('같은 조건으로 다른 공간을 찾아볼게요') ||
+        message.content.includes('후보를 길게 나열하지 않고 한 곳씩 보여드려요')
+      ) {
+        return message.content;
+      }
+      break;
+    }
+    return null;
+  }, [state.messages]);
   const showDraft =
     activeRecommendationValid &&
-    applicationComplete &&
+    draft !== null &&
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
   const showCompletedDraft =
@@ -361,6 +392,12 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     void conv.findAlternative();
   };
 
+  const onCancelSearch = () => {
+    setComposerValue('');
+    setManualHints(null);
+    void conv.sendMessage('취소');
+  };
+
   const onOpenLogin = () => {
     void conv.openLoginTab();
   };
@@ -397,6 +434,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
               currentIdx={snapshot.currentIdx}
               found={snapshot.found}
               frozen={snapshot.frozen}
+              onCancel={!snapshot.frozen ? onCancelSearch : undefined}
             />
           ))}
 
@@ -406,6 +444,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
             currentIdx={0}
             found={false}
             pendingLabel="GLS 세션을 확인하고 후보 공간을 불러오는 중이에요."
+            onCancel={onCancelSearch}
           />
         )}
 
@@ -426,6 +465,11 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
             slots={adaptSlots(state.slots)}
             onAlternative={onAlternative}
           />
+        )}
+        {showRecommendation && proposed && latestAlternativeNotice && (
+          <ChatMessage role="assistant">
+            {latestAlternativeNotice}
+          </ChatMessage>
         )}
 
         {showP2 && suggestedMemory && (
@@ -458,6 +502,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
                 superseded ||
                 (submitStep === 'saved' || state.automationStatus.kind === 'done')
               }
+              canSubmit={applicationComplete}
               onSubmit={onSubmitDraft}
               onEdit={onEditDraft}
             />

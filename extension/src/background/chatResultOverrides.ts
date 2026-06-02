@@ -1,10 +1,12 @@
 import type { ApplicationState, FilledSlots, ParseResult } from '../shared/types';
 import {
+  applyContextualMeridiemRange,
   clearTimeSlots,
   crossesMidnight,
   emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
   isBeyondFutureBookingWindow,
+  isLikelyOutsideGeneralReservationHours,
   usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy';
 import { timeToMinutes } from './chatSlotCorrections';
@@ -21,6 +23,7 @@ export function applySameDayTimeOverride(
     intent: 'new_reservation',
     ready_to_search: false,
     missing_required: ['start_time', 'end_time'],
+    filled_slots: clearTimeSlots(result.filled_slots),
     assistant_message:
       '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
     application_state: previousApplicationState ?? result.application_state,
@@ -37,7 +40,7 @@ export function applyTimeGranularityOverride(
     intent: 'new_reservation',
     ready_to_search: false,
     missing_required: ['start_time', 'end_time'],
-    filled_slots: emptyFilledSlots(),
+    filled_slots: clearTimeSlots(result.filled_slots),
     assistant_message:
       'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
     application_state: previousApplicationState ?? result.application_state,
@@ -58,6 +61,36 @@ export function applyAmbiguousMeridiemOverride(
     filled_slots: clearTimeSlots(result.filled_slots),
     assistant_message:
       '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
+    application_state: previousApplicationState ?? result.application_state,
+  };
+}
+
+export function applyContextualMeridiemRangeOverride(
+  result: ParseResult,
+  text: string,
+): ParseResult {
+  const filledSlots = applyContextualMeridiemRange(result.filled_slots, text);
+  return filledSlots === result.filled_slots
+    ? result
+    : {
+        ...result,
+        filled_slots: filledSlots,
+      };
+}
+
+export function applyGeneralReservationHoursOverride(
+  result: ParseResult,
+  previousApplicationState: ApplicationState | null,
+): ParseResult {
+  if (!isLikelyOutsideGeneralReservationHours(result.filled_slots)) return result;
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: ['start_time', 'end_time'],
+    filled_slots: clearTimeSlots(result.filled_slots),
+    assistant_message:
+      '새벽이나 심야 시간대는 일반 GLS 공간예약 가능 시간 밖으로 보여요. 예: 09:00부터 22:00 사이처럼 다시 알려주세요.',
     application_state: previousApplicationState ?? result.application_state,
   };
 }

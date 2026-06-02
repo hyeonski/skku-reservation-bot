@@ -1,4 +1,5 @@
 import type { SearchCandidate } from '../../types';
+import { Icon } from '../../icons';
 
 interface SearchProgressCardProps {
   candidates: SearchCandidate[];
@@ -10,6 +11,8 @@ interface SearchProgressCardProps {
   frozen?: boolean;
   /** 후보를 받기 전의 준비 상태 텍스트. */
   pendingLabel?: string;
+  /** 활성 탐색을 사용자가 중단할 때 호출. */
+  onCancel?: () => void;
 }
 
 export function SearchProgressCard({
@@ -18,6 +21,7 @@ export function SearchProgressCard({
   found,
   frozen = false,
   pendingLabel,
+  onCancel,
 }: SearchProgressCardProps) {
   const total = candidates.length;
   const safeIdx = Math.min(currentIdx, total);
@@ -30,8 +34,21 @@ export function SearchProgressCard({
     <div className="card">
       <div className="card-head">
         <div className="title">빈 공간 찾는 중</div>
-        <div className="tag accent">
-          {isPreparing ? '준비 중' : `검증 ${Math.min(safeIdx + 1, total)}/${total}`}
+        <div className="card-actions">
+          <div className="tag accent">
+            {isPreparing ? '준비 중' : `검증 ${Math.min(safeIdx + 1, total)}/${total}`}
+          </div>
+          {onCancel && !frozen && (
+            <button
+              type="button"
+              className="btn ghost small"
+              onClick={onCancel}
+              title="탐색 중단"
+            >
+              <Icon name="x-circle" size={13} />
+              중단
+            </button>
+          )}
         </div>
       </div>
       <div className="card-body">

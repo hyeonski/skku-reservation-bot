@@ -1,5 +1,11 @@
 import type { BgChatResponse, PopupToBackground } from '../../shared/messages';
-import type { ChatMessage, ParseResult } from '../../shared/types';
+import type {
+  ApplicationConfidenceLevel,
+  ApplicationField,
+  ChatMessage,
+  ParseResult,
+  ReservationFormData,
+} from '../../shared/types';
 import {
   emptyFilledSlots,
   isSearchReady,
@@ -13,6 +19,7 @@ import {
 } from '../../sidepanel/utils/parseModification';
 import {
   applyApplicationLengthGuard,
+  applyApplicationCollectionPromptGuard,
   applyChatSafetyOverride,
   asksForCandidateList,
   emptyApplicationState,
@@ -30,8 +37,10 @@ import {
 } from '../chatSlotCorrections';
 import {
   applyAmbiguousMeridiemOverride,
+  applyContextualMeridiemRangeOverride,
   applyDurationLimitOverride,
   applyFutureBookingWindowOverride,
+  applyGeneralReservationHoursOverride,
   applySameDayTimeOverride,
   applyTimeGranularityOverride,
 } from '../chatResultOverrides';
@@ -48,6 +57,74 @@ function parseFailureMessage(error: unknown): string {
     return '예약 서버와 연결하지 못했어요. 서버가 켜져 있는지 확인한 뒤 다시 시도해 주세요.';
   }
   return '예약 요청을 해석하는 중 문제가 생겼어요. 잠시 뒤 다시 시도해 주세요.';
+}
+
+function computeMissingApplication(
+  draft: ReservationFormData | null,
+  confidence: Record<ApplicationField, ApplicationConfidenceLevel>,
+): ApplicationField[] {
+  if (!draft) return ['organization', 'eventName', 'purpose', 'hangsaGbCode'];
+
+  const missing: ApplicationField[] = [];
+  if (!draft.organization.trim()) missing.push('organization');
+  if (!draft.eventName.trim()) missing.push('eventName');
+  if (!draft.purpose.trim()) missing.push('purpose');
+  if (!draft.hangsaGbCode.trim() || confidence.hangsaGbCode === 'low') {
+    missing.push('hangsaGbCode');
+  }
+  return missing;
+}
+
+function canApplyDraftOnlyEdit(
+  command: ReturnType<typeof parseModification>,
+  latestMessage: string,
+): command is Extract<ReturnType<typeof parseModification>, { intent: 'edit' }> {
+  if (command.intent !== 'edit') return false;
+  if (/행사\s*구분|인원|\d+\s*명/.test(latestMessage)) return false;
+  return command.edits.every((edit) =>
+    edit.field === 'event' || edit.field === 'group' || edit.field === 'purpose',
+  );
+}
+
+function applyEditedFieldConfidence(
+  confidence: Record<ApplicationField, ApplicationConfidenceLevel>,
+  command: Extract<ReturnType<typeof parseModification>, { intent: 'edit' }>,
+): Record<ApplicationField, ApplicationConfidenceLevel> {
+  const next = { ...confidence };
+  for (const edit of command.edits) {
+    if (edit.field === 'event') next.eventName = 'high';
+    if (edit.field === 'group') next.organization = 'high';
+    if (edit.field === 'purpose') next.purpose = 'high';
+  }
+  return next;
+}
+
+function hasContextualBareTimeEdit(text: string, previousSlots: ParseResult['filled_slots'] | null): boolean {
+  if (!previousSlots?.start_time) return false;
+  if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
+  if (/오전|오후|새벽|심야|밤/.test(text)) return false;
+  return /\d{1,2}\s*시(?!간)/.test(text);
+}
+
+async function applyCapacityPreflight(result: ParseResult): Promise<ParseResult> {
+  const headcount = result.filled_slots.headcount;
+  if (!result.ready_to_search || headcount == null || headcount <= 0) return result;
+
+  try {
+    const capacityCandidates = await apiClient.listSpaces({ headcount });
+    if (capacityCandidates.length > 0) return result;
+  } catch (error) {
+    console.warn('[SW] capacity preflight failed; continuing search:', error);
+    return result;
+  }
+
+  return {
+    ...result,
+    intent: 'new_reservation',
+    ready_to_search: false,
+    missing_required: [],
+    assistant_message: `${headcount}명을 수용할 수 있는 공간이 등록되어 있지 않아요. 인원을 줄이거나 행사를 나눠서 다시 알려주세요.`,
+  };
 }
 
 export async function handleChatRequest(
@@ -199,6 +276,75 @@ export async function handleChatRequest(
     return { type: 'BG_CHAT_RESPONSE', result };
   }
 
+  if (previousDraft && canApplyDraftOnlyEdit(parsedDraftCommand, msg.latestMessage)) {
+    const modified = applyDraftModification(previousDraft, parsedDraftCommand) ?? null;
+    if (modified) {
+      const currentApplicationState = ctx.applicationState ?? emptyApplicationState();
+      const confidence = applyEditedFieldConfidence(
+        currentApplicationState.confidence,
+        parsedDraftCommand,
+      );
+      const missingApplication = computeMissingApplication(modified, confidence);
+      const applicationState = {
+        ...currentApplicationState,
+        draft: modified,
+        missing_application: missingApplication,
+        needs_application_collection: missingApplication.length > 0,
+        suggested_memory: null,
+        recommendation: null,
+        confidence,
+        source: 'user_modified' as const,
+      };
+      const result: ParseResult = applyApplicationCollectionPromptGuard(
+        {
+          conversation_id: msg.conversationId,
+          filled_slots: previousSlots ?? emptyFilledSlots(),
+          missing_required: [],
+          intent: 'modify_application',
+          ready_to_search: false,
+          assistant_message: '신청 정보를 업데이트했어요. 아래 카드에서 확인해 주세요.',
+          application_state: applicationState,
+        },
+        msg.latestMessage,
+      );
+
+      ctx.conversationStatus = 'active';
+      ctx.confirmedReservationLabel = null;
+      ctx.confirmedSpaceCode = null;
+      ctx.confirmedSpaceLabel = null;
+      ctx.updatedAt = new Date().toISOString();
+      ctx.lastIntent = result.intent;
+      ctx.lastFilledSlots = result.filled_slots;
+      ctx.applicationState = applicationState;
+      syncApplicationDraftToAutomation(ctx, applicationState.draft);
+
+      const assistantMessageTs = new Date().toISOString();
+      const historyWithAssistant: ChatMessage[] = [
+        ...msg.history,
+        { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
+      ];
+      ctx.history = historyWithAssistant;
+      void persistContexts();
+      void syncConversationSummaryFromContext(ctx);
+      void mirrorConversation(
+        msg.conversationId,
+        {
+          history: historyWithAssistant,
+          status: ctx.conversationStatus,
+          lastIntent: result.intent,
+          lastFilledSlots: result.filled_slots,
+          lastApplicationState: result.application_state,
+          confirmedReservationLabel: null,
+          confirmedSpaceCode: null,
+          confirmedSpaceLabel: null,
+        },
+        '[SW] localDraftEdit mirror failed:',
+      );
+
+      return { type: 'BG_CHAT_RESPONSE', result };
+    }
+  }
+
   const requestNow = apiClient.localOffsetIso();
   let result: ParseResult;
   try {
@@ -301,7 +447,10 @@ export async function handleChatRequest(
   }
 
   result = applyChatSafetyOverride(result, msg.latestMessage, ctx.applicationState);
-  result = applyAmbiguousMeridiemOverride(result, msg.latestMessage, ctx.applicationState);
+  result = applyContextualMeridiemRangeOverride(result, msg.latestMessage);
+  if (!hasContextualBareTimeEdit(msg.latestMessage, previousSlots)) {
+    result = applyAmbiguousMeridiemOverride(result, msg.latestMessage, ctx.applicationState);
+  }
 
   result = {
     ...result,
@@ -310,6 +459,7 @@ export async function handleChatRequest(
   result = applyFutureBookingWindowOverride(result, requestNow, ctx.applicationState);
   result = applySameDayTimeOverride(result, ctx.applicationState);
   result = applyTimeGranularityOverride(result, ctx.applicationState);
+  result = applyGeneralReservationHoursOverride(result, ctx.applicationState);
   result = applyDurationLimitOverride(result, ctx.applicationState);
 
   if (
@@ -318,13 +468,20 @@ export async function handleChatRequest(
       result.intent === 'modify_application' ||
       parsedDraftCommand.intent === 'edit')
   ) {
-    const modified = applyDraftModification(previousDraft, parsedDraftCommand) ?? null;
+    const editBase = result.application_state.draft ?? previousDraft;
+    const modified = editBase
+      ? applyDraftModification(editBase, parsedDraftCommand)
+      : null;
     if (modified) {
+      const missingApplication = computeMissingApplication(
+        modified,
+        result.application_state.confidence,
+      );
       result.application_state = {
         ...result.application_state,
         draft: modified,
-        missing_application: [],
-        needs_application_collection: false,
+        missing_application: missingApplication,
+        needs_application_collection: missingApplication.length > 0,
         suggested_memory: null,
         recommendation: null,
         source: 'user_modified',
@@ -333,6 +490,8 @@ export async function handleChatRequest(
   }
 
   result = applyApplicationLengthGuard(result);
+  result = applyApplicationCollectionPromptGuard(result, msg.latestMessage);
+  result = await applyCapacityPreflight(result);
 
   ctx.conversationStatus = 'active';
   ctx.confirmedReservationLabel = null;

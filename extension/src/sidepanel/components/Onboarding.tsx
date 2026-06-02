@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Icon } from '../icons';
+import { getReservationExamples } from '../utils/reservationExamples';
 
 interface OnboardingProps {
   onComplete: () => void;
@@ -26,12 +27,7 @@ const STEPS: StepData[] = [
     hero: null,
     title: '이렇게 말해보세요',
     body: '정확히 안 적어도 돼요. 누락된 정보는 에이전트가 다시 물어봐요.',
-    examples: [
-      '내일 오후 6시 20명 학생회 회의',
-      '다음 주 화요일 14시부터 2시간',
-      '5/27 오후 3시 50명 행사장',
-      '이번 주 금요일 빈 회의실',
-    ],
+    examples: getReservationExamples(),
     cta: '시작하기',
   },
 ];

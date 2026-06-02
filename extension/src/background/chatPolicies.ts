@@ -32,6 +32,14 @@ function hasRepeatReservationCondition(text: string): boolean {
   return RESERVATION_REPEAT_PATTERN.test(normalized);
 }
 
+function hasAmbiguousHangsaTerm(text: string | undefined): boolean {
+  if (!text) return false;
+  const normalized = normalizeWhitespace(text);
+  const ambiguousTerm =
+    /행사\s*구분.*(?:모임|행사|활동)|(?:^|[\s,，])(?:모임|행사|활동)(?=$|[\s,，.!?])/;
+  return ambiguousTerm.test(normalized);
+}
+
 function findApplicationLengthIssue(
   draft: ReservationFormData | null | undefined,
 ): ApplicationLengthIssue | null {
@@ -209,5 +217,33 @@ export function applyApplicationLengthGuard(result: ParseResult): ParseResult {
       recommendation: null,
       source: result.application_state.source ?? 'user_modified',
     },
+  };
+}
+
+export function applyApplicationCollectionPromptGuard(
+  result: ParseResult,
+  latestMessage?: string,
+): ParseResult {
+  const applicationState = result.application_state;
+  if (!applicationState.needs_application_collection) return result;
+
+  const needsOnlyHangsa =
+    applicationState.missing_application.length === 1 &&
+    applicationState.missing_application[0] === 'hangsaGbCode' &&
+    applicationState.confidence.hangsaGbCode === 'low';
+  const needsAmbiguousHangsa =
+    applicationState.missing_application.includes('hangsaGbCode') &&
+    applicationState.confidence.hangsaGbCode === 'low' &&
+    hasAmbiguousHangsaTerm(latestMessage);
+  if (!needsOnlyHangsa && !needsAmbiguousHangsa) return result;
+
+  return {
+    ...result,
+    ready_to_search:
+      result.intent === 'modify_application' || needsAmbiguousHangsa
+        ? false
+        : result.ready_to_search,
+    assistant_message:
+      '이 일정은 학생회/동아리 행사에 더 가깝나요, 학과 주관 행사에 더 가깝나요?',
   };
 }

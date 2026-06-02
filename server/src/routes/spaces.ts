@@ -9,6 +9,7 @@
  * - active = true
  * - campusCode/buildingNo가 주어지면 추가 매칭
  * - building/space가 주어지면 표시명 contains 매칭
+ * - space가 GLS 공간코드 형태이면 glsSpaceCode exact 매칭
  *
  * 정렬:
  * - userOrgCode가 주어지면 useJojikCode 일치 항목 우선 (isUserOrgPreferred=true 먼저)
@@ -43,6 +44,11 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
     },
     async (req) => {
       const { headcount, campusCode, buildingNo, building, space, userOrgCode } = req.query;
+      const normalizedSpace = space?.trim().replace(/\s+/g, '').replace(/호$/, '');
+      const spaceCodeFilter =
+        normalizedSpace && /^[0-9A-Za-z]{5,8}$/.test(normalizedSpace)
+          ? normalizedSpace
+          : null;
 
       const rows = await app.prisma.space.findMany({
         where: {
@@ -52,7 +58,11 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
           ...(campusCode ? { campusCode } : {}),
           ...(buildingNo ? { buildingNo } : {}),
           ...(building ? { buildingName: { contains: building } } : {}),
-          ...(space ? { roomName: { contains: space } } : {}),
+          ...(spaceCodeFilter
+            ? { glsSpaceCode: spaceCodeFilter }
+            : space
+              ? { roomName: { contains: space } }
+              : {}),
         },
         // DB 단에서는 capacityMax 오름차순으로 정렬해두고,
         // userOrg 우선순위는 메모리에서 안정 정렬로 한 번 더 처리한다.

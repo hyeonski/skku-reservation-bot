@@ -65,6 +65,7 @@ export interface SpaceSummary {
   code: string;
   name: string;
   building: string;
+  buildingNo?: string;
   floor?: string;
   capa: string;
   useJojikName?: string;

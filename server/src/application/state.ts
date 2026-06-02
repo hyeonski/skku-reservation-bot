@@ -139,6 +139,10 @@ function containsScheduleSignal(text: string): boolean {
   );
 }
 
+function hasMeaningfulApplicationText(text: string): boolean {
+  return /[0-9A-Za-z가-힣]/.test(normalizeWhitespace(text));
+}
+
 function hasReuseSignal(text: string): boolean {
   return /(지난번|저번|예전|같은 걸로|같은걸로|전에처럼|지난번처럼|저번처럼)/.test(text);
 }
@@ -152,6 +156,13 @@ function isAffirmative(text: string): boolean {
 function isNegative(text: string): boolean {
   return /^(?:아니|아니요|말고|새로|새로 할게|직접 설명할게|새로 설명하기)$/i.test(
     normalizeWhitespace(text),
+  );
+}
+
+function isHangsaClarificationAnswer(text: string): boolean {
+  const normalized = normalizeWhitespace(text);
+  return /^(?:학생회|동아리|학생회\s*\/\s*동아리|학생회\s*또는\s*동아리|학과|학부|전공|세미나|스터디)(?:\s*(?:행사|주관|모임|활동))?$/.test(
+    normalized,
   );
 }
 
@@ -171,10 +182,11 @@ function isApplicationCollectionFollowUp(text: string, previousState: Applicatio
   const normalized = normalizeWhitespace(text);
   if (!previousState.needs_application_collection) return false;
   if (normalized.length < 2) return false;
+  if (!hasMeaningfulApplicationText(normalized)) return false;
   if (isAffirmative(normalized) || isNegative(normalized)) return false;
   if (containsScheduleSignal(normalized)) return false;
   if (
-    /(회의실|강의실|공간|예약|신청|잡아줘|잡아\b|찾아줘|찾아\s*줘|빌려줘|빌려\s*줘|비어|빈\s*시간|가능|다른\s*공간|취소|중단)/.test(
+    /(회의실|강의실|공간|예약|잡아줘|잡아\b|찾아줘|찾아\s*줘|빌려줘|빌려\s*줘|비어|빈\s*시간|가능|다른\s*공간|취소|중단)/.test(
       normalized,
     )
   ) {
@@ -363,7 +375,11 @@ function extractFieldUpdates(
 
   if (!changed) return null;
 
-  if (touchedFields.has('eventName') && !touchedFields.has('purpose')) {
+  if (
+    touchedFields.has('eventName') &&
+    !touchedFields.has('purpose') &&
+    !currentDraft?.purpose.trim()
+  ) {
     nextDraft.purpose = `${nextDraft.eventName} 진행`;
     nextConfidence.purpose = 'medium';
   }
@@ -383,6 +399,7 @@ function deriveDraftFromDescription(
 ): DraftUpdateResult | null {
   const normalized = cleanSentenceEnding(text);
   if (!normalized) return null;
+  if (!hasMeaningfulApplicationText(normalized)) return null;
 
   const organization = extractOrganization(normalized);
   const hangsa = classifyHangsa(normalized);
@@ -676,9 +693,7 @@ export function buildApplicationState(
     nextIntent = 'modify_application';
     suggestedMemory = null;
   }
-  const onlyMissingHangsa =
-    previousState.missing_application.length === 1 &&
-    previousState.missing_application[0] === 'hangsaGbCode';
+  const needsHangsaClarification = previousState.missing_application.includes('hangsaGbCode');
 
   if (suggestedMemory && isAffirmative(latestUser)) {
     draft = withHeadcount(suggestedMemory.formData, args.filledSlots.headcount);
@@ -709,8 +724,8 @@ export function buildApplicationState(
       assistantMessage = '신청 정보를 업데이트했어요. 아래 카드에서 확인해 주세요.';
     } else if (
       draft &&
-      onlyMissingHangsa &&
-      /(학생회|동아리|학과|학부|전공|세미나|스터디)/.test(latestUser)
+      needsHangsaClarification &&
+      isHangsaClarificationAnswer(latestUser)
     ) {
       const hangsaOnly = applyHangsaOnlyUpdate(latestUser, draft, confidence);
       draft = hangsaOnly.draft;

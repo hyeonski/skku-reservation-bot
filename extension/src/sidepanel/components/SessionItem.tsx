@@ -79,7 +79,31 @@ export function SessionItem({ session, onPick, onDelete }: SessionItemProps) {
       <button
         type="button"
         className="menu"
+        aria-label={confirmDelete ? '대화 삭제 확인' : '대화 삭제'}
         onClick={handleDelete}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          if (confirmDelete) {
+            e.preventDefault();
+            confirmDeletion();
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (confirmDelete) {
+              confirmDeletion();
+              return;
+            }
+            setConfirmDelete(true);
+            clearDeleteConfirmTimer();
+            deleteConfirmTimer.current = setTimeout(() => {
+              setConfirmDelete(false);
+              deleteConfirmTimer.current = null;
+            }, 5000);
+          }
+        }}
         title={confirmDelete ? '한 번 더 누르면 삭제' : '삭제'}
       >
         <Icon name={confirmDelete ? 'check' : 'trash'} size={13} />

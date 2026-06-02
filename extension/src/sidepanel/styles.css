@@ -440,6 +440,13 @@ input, textarea { font: inherit; color: inherit; }
   font-size: 10px;
 }
 
+.card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
 /* Search/progress card */
 .search-progress {
   display: flex;
@@ -693,7 +700,7 @@ button.example-item:hover { background: var(--bg-muted); border-color: var(--bor
   right: 8px;
   top: 8px;
   opacity: 0;
-  width: 22px; height: 22px;
+  width: 28px; height: 28px;
   border-radius: 4px;
   display: grid; place-items: center;
   color: var(--text-muted);
@@ -701,7 +708,8 @@ button.example-item:hover { background: var(--bg-muted); border-color: var(--bor
   border: none;
   transition: opacity 0.1s;
 }
-.session-item:hover .menu { opacity: 1; }
+.session-item:hover .menu,
+.session-item:focus-within .menu { opacity: 1; }
 .session-item .menu:hover { background: var(--bg-strong); }
 
 .sessions-divider {

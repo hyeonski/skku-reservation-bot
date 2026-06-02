@@ -75,6 +75,27 @@ export interface CandidateQueueState {
 }
 
 const queues = new Map<string, CandidateQueueState>();
+const activeStatusEmitters = new Map<string, (s: AutomationStatus) => void>();
+
+function makeGlsTabClosedMessage(): string {
+  return 'GLS 창이 닫혔어요. GLS 탭을 다시 열어 예약 가능 여부를 확인해 주세요.';
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  let changed = false;
+  for (const [conversationId, state] of queues.entries()) {
+    if (state.tabId !== tabId) continue;
+    queues.delete(conversationId);
+    activeStatusEmitters
+      .get(conversationId)
+      ?.({ kind: 'error', message: makeGlsTabClosedMessage() });
+    activeStatusEmitters.delete(conversationId);
+    changed = true;
+  }
+  if (changed) {
+    void persistQueues();
+  }
+});
 
 async function persistQueues(): Promise<void> {
   try {
@@ -729,7 +750,11 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     log: state.log,
   });
 
+  activeStatusEmitters.set(conversationId, onStatusChange);
   await searchNext(state, onStatusChange, emitBroadcast);
+  if (queues.get(conversationId) !== state) {
+    activeStatusEmitters.delete(conversationId);
+  }
 }
 
 function isQueueActive(state: CandidateQueueState): boolean {
@@ -769,6 +794,15 @@ async function searchNext(
       });
     } catch (e) {
       if (!isQueueActive(state)) return;
+      const message = (e as Error).message;
+      const tabStillExists = await chrome.tabs.get(state.tabId).then(() => true).catch(() => false);
+      if (!tabStillExists) {
+        queues.delete(state.conversationId);
+        activeStatusEmitters.delete(state.conversationId);
+        onStatusChange({ kind: 'error', message: makeGlsTabClosedMessage() });
+        void persistQueues();
+        return;
+      }
       // Transient content error — 로그에 실패로 남기고 다음 후보로.
       state.log.push({
         glsSpaceCode: candidate.glsSpaceCode,
@@ -776,7 +810,7 @@ async function searchNext(
         roomName: candidate.roomName,
         available: false,
         conflicts: [
-          { kind: '예약', timeTerm: '', info: `통신 오류: ${(e as Error).message}` },
+          { kind: '예약', timeTerm: '', info: `통신 오류: ${message}` },
         ],
       });
       onStatusChange({

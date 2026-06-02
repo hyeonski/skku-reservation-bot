@@ -31,11 +31,13 @@ import {
   summarizeReservationLabel,
 } from '../application/state.js';
 import {
+  applyContextualMeridiemRange,
   clearTimeSlots,
   crossesMidnight,
   emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
   isBeyondFutureBookingWindow,
+  isLikelyOutsideGeneralReservationHours,
   isSupportedReservationMinute,
   usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy.js';
@@ -63,6 +65,12 @@ function isLikelyOutOfScopeSmallTalk(text: string): boolean {
   return /(점심|저녁|아침|밥|먹|메뉴|날씨|심심|농담|안녕|고마워|뭐\s*(?:먹|하지|할까))/.test(
     normalized,
   );
+}
+
+function isSymbolOnlyInput(text: string): boolean {
+  const normalized = text.trim();
+  if (!normalized) return false;
+  return !/[0-9A-Za-z가-힣]/.test(normalized);
 }
 
 function makeOutOfScopeResult(): LLMParseResult {
@@ -201,20 +209,91 @@ function applyStudentCenterCampusClarification(
   };
 }
 
+function extractExplicitSpaceCode(text: string): string | null {
+  const matches = text.matchAll(/(^|[^\d])(\d{5,6})(?:\s*호)?(?=$|[^\d])/g);
+  for (const match of matches) {
+    const code = match[2];
+    if (code) return code;
+  }
+  return null;
+}
+
+async function applyExplicitSpaceCodeOverride(
+  app: FastifyInstance,
+  result: LLMParseResult,
+  text: string,
+): Promise<LLMParseResult> {
+  const code = extractExplicitSpaceCode(text);
+  if (!code) return result;
+
+  const space = await app.prisma.space.findUnique({
+    where: { glsSpaceCode: code },
+    select: {
+      campusName: true,
+      buildingName: true,
+      glsSpaceCode: true,
+    },
+  });
+  if (!space) return result;
+
+  return {
+    ...result,
+    filled_slots: {
+      ...result.filled_slots,
+      campus: space.campusName,
+      building: space.buildingName,
+      space: space.glsSpaceCode,
+    },
+  };
+}
+
 function applySameDayTimeOverride(result: LLMParseResult): LLMParseResult {
   if (!crossesMidnight(result.filled_slots)) return result;
-  return makeInvalidInputResult(
-    '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
-    ['start_time', 'end_time'],
-  );
+  return {
+    ...result,
+    filled_slots: clearTimeSlots(result.filled_slots),
+    missing_required: ['start_time', 'end_time'],
+    ready_to_search: false,
+    assistant_message:
+      '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
+  };
 }
 
 function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {
   if (!usesUnsupportedReservationMinute(result.filled_slots)) return result;
-  return makeInvalidInputResult(
-    'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
-    ['start_time', 'end_time'],
-  );
+  return {
+    ...result,
+    filled_slots: clearTimeSlots(result.filled_slots),
+    missing_required: ['start_time', 'end_time'],
+    ready_to_search: false,
+    assistant_message:
+      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+  };
+}
+
+function applyContextualMeridiemRangeOverride(
+  result: LLMParseResult,
+  text: string,
+): LLMParseResult {
+  const filledSlots = applyContextualMeridiemRange(result.filled_slots, text);
+  return filledSlots === result.filled_slots
+    ? result
+    : {
+        ...result,
+        filled_slots: filledSlots,
+      };
+}
+
+function applyGeneralReservationHoursOverride(result: LLMParseResult): LLMParseResult {
+  if (!isLikelyOutsideGeneralReservationHours(result.filled_slots)) return result;
+  return {
+    ...result,
+    filled_slots: clearTimeSlots(result.filled_slots),
+    missing_required: ['start_time', 'end_time'],
+    ready_to_search: false,
+    assistant_message:
+      '새벽이나 심야 시간대는 일반 GLS 공간예약 가능 시간 밖으로 보여요. 예: 09:00부터 22:00 사이처럼 다시 알려주세요.',
+  };
 }
 
 function applyAmbiguousMeridiemSlotOverride(
@@ -260,7 +339,15 @@ function makeImpossibleInputResult(text: string): LLMParseResult | null {
   return null;
 }
 
-function parseKoreanClock(text: string): string | null {
+type MeridiemContext = 'am' | 'pm' | null;
+
+function getMeridiemContext(time: string | null | undefined): MeridiemContext {
+  const minutes = timeToMinutes(time ?? null);
+  if (minutes == null) return null;
+  return minutes >= 12 * 60 ? 'pm' : 'am';
+}
+
+function parseKoreanClock(text: string, context: MeridiemContext = null): string | null {
   const normalized = text.replace(/\s+/g, '');
   const match = normalized.match(/^(오전|오후)?(\d{1,2})시(?:([0-5]?\d)분)?$/);
   if (!match?.[2]) return null;
@@ -272,6 +359,8 @@ function parseKoreanClock(text: string): string | null {
   const meridiem = match[1];
   if (meridiem === '오후' && hour < 12) hour += 12;
   if (meridiem === '오전' && hour === 12) hour = 0;
+  if (!meridiem && context === 'pm' && hour < 12) hour += 12;
+  if (!meridiem && context === 'am' && hour === 12) hour = 0;
   if (hour === 24 && minute !== 0) return null;
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
@@ -290,14 +379,65 @@ function minutesToTime(minutes: number): string {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
 
+function formatIsoDate(year: number, month: number, day: number): string | null {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() !== month - 1 ||
+    d.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(
+    day,
+  ).padStart(2, '0')}`;
+}
+
+function parseExplicitDateEdit(text: string, baseDate: string | null | undefined): string | null {
+  if (!baseDate) return null;
+  const base = new Date(`${baseDate}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return null;
+  const baseYear = base.getUTCFullYear();
+  const baseMonth = base.getUTCMonth() + 1;
+
+  const monthDay = text.match(/(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (monthDay?.[2] && monthDay[3]) {
+    const year = monthDay[1] ? Number.parseInt(monthDay[1], 10) : baseYear;
+    return formatIsoDate(year, Number.parseInt(monthDay[2], 10), Number.parseInt(monthDay[3], 10));
+  }
+
+  const numeric = text.match(/(?:(20\d{2})[./-])?(\d{1,2})[./-](\d{1,2})(?!\d)/);
+  if (numeric?.[2] && numeric[3]) {
+    const year = numeric[1] ? Number.parseInt(numeric[1], 10) : baseYear;
+    return formatIsoDate(year, Number.parseInt(numeric[2], 10), Number.parseInt(numeric[3], 10));
+  }
+
+  const dayOnly = text.match(/(?:^|[^\d])(\d{1,2})\s*일(?:[^\d]|$)/);
+  if (dayOnly?.[1] && !/\d{1,2}\s*월\s*\d{1,2}\s*일/.test(text)) {
+    return formatIsoDate(baseYear, baseMonth, Number.parseInt(dayOnly[1], 10));
+  }
+
+  return null;
+}
+
 function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): FilledSlotsType | null {
-  if (!base || !/(바꾸|변경|수정|아니|시간(?:은|을|는)|\d+\s*명\s*으로)/.test(text)) {
+  if (!base || !/(바꾸|변경|수정|아니|다시|찾아|시간(?:은|을|는)|\d+\s*명\s*으로)/.test(text)) {
     return null;
   }
 
   const next: FilledSlotsType = { ...base };
   let changed = false;
   let explicitSlotValue = false;
+  const meridiemContext = getMeridiemContext(base.start_time);
+
+  const explicitDate = parseExplicitDateEdit(text, base.date);
+  if (explicitDate) {
+    explicitSlotValue = true;
+    if (explicitDate !== next.date) {
+      next.date = explicitDate;
+      changed = true;
+    }
+  }
 
   const headcountMatch = text.match(/(\d+)\s*명/);
   if (headcountMatch?.[1]) {
@@ -315,8 +455,8 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
     /(\d{1,2})\s*시(?!간)(?:\s*\d{1,2}\s*분)?\s*(?:부터|[-–~])\s*(\d{1,2})\s*시(?!간)/,
   );
   if (rangeMatch?.[1] && rangeMatch[2]) {
-    const start = parseKoreanClock(`${rangeMatch[1]}시`);
-    const end = parseKoreanClock(`${rangeMatch[2]}시`);
+    const start = parseKoreanClock(`${rangeMatch[1]}시`, meridiemContext);
+    const end = parseKoreanClock(`${rangeMatch[2]}시`, meridiemContext);
     const startMin = timeToMinutes(start);
     const endMin = timeToMinutes(end);
     if (start && end && startMin != null && endMin != null && endMin > startMin) {
@@ -330,7 +470,7 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
     const startMatch = text.match(
       /(?:시간(?:은|을|는)?\s*)?((?:오전|오후)?\s*\d{1,2}\s*시(?!간)(?:\s*\d{1,2}\s*분)?)(?:\s*부터)?/,
     );
-    const start = startMatch?.[1] ? parseKoreanClock(startMatch[1]) : null;
+    const start = startMatch?.[1] ? parseKoreanClock(startMatch[1], meridiemContext) : null;
     if (start) {
       explicitSlotValue = true;
       if (start !== next.start_time) {
@@ -364,11 +504,24 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
   return changed || explicitSlotValue ? next : null;
 }
 
+function hasContextualBareTimeEdit(
+  text: string,
+  previousSlots: FilledSlotsType | null,
+): boolean {
+  if (!previousSlots?.start_time) return false;
+  if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
+  if (/오전|오후|새벽|심야|밤/.test(text)) return false;
+  return /\d{1,2}\s*시(?!간)/.test(text);
+}
+
 export const __parseRouteTestables = {
   applyInlineSlotEdits,
   applyAmbiguousMeridiemSlotOverride,
   applyFutureBookingWindowOverride,
   applyImpossibleSlotOverride,
+  applyContextualMeridiemRangeOverride,
+  applyGeneralReservationHoursOverride,
+  extractExplicitSpaceCode,
   applySameDayTimeOverride,
   applyStudentCenterCampusClarification,
   applyStudentCouncilBuildingDisambiguation,
@@ -431,6 +584,11 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       const impossibleInputResult = makeImpossibleInputResult(latestUserMessage);
       if (impossibleInputResult) {
         llmResult = impossibleInputResult;
+      } else if (isSymbolOnlyInput(latestUserMessage)) {
+        llmResult = makeInvalidInputResult(
+          '예약할 날짜, 시간, 인원처럼 이해할 수 있는 내용으로 다시 알려주세요.',
+          ['headcount', 'date', 'start_time', 'end_time'],
+        );
       } else if (isLikelyOutOfScopeSmallTalk(latestUserMessage)) {
         llmResult = makeOutOfScopeResult();
       } else {
@@ -440,8 +598,11 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
           llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
+          llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
           llmResult = applySameDayTimeOverride(llmResult);
           llmResult = applyTimeGranularityOverride(llmResult);
+          llmResult = applyGeneralReservationHoursOverride(llmResult);
+          llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
         } catch (err) {
           request.log.error({ err }, 'parseWithLLM failed');
           reply.code(502).send({
@@ -463,10 +624,15 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           assistant_message: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
         };
         llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
+        llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
         llmResult = applySameDayTimeOverride(llmResult);
         llmResult = applyTimeGranularityOverride(llmResult);
+        llmResult = applyGeneralReservationHoursOverride(llmResult);
+        llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
       }
-      llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
+      if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {
+        llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
+      }
 
       const memories = await app.prisma.conversation.findMany({
         where: {

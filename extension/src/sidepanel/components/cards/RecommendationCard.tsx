@@ -18,6 +18,12 @@ export function RecommendationCard({
   onAlternative,
 }: RecommendationCardProps) {
   const limitTime = formatLimitTime(space.limitTimeHHMM);
+  const buildingLabel = space.buildingNo
+    ? `${space.building}(${space.buildingNo}동)`
+    : space.building;
+  const locationLabel = space.floor
+    ? `${buildingLabel} · ${space.floor}`
+    : buildingLabel;
 
   return (
     <div className="card">
@@ -31,10 +37,8 @@ export function RecommendationCard({
             <Icon name="building" size={22} />
           </div>
           <div className="info">
-            <div className="name">{space.name}</div>
-            <div className="building">
-              {space.building} · {space.floor ?? space.code}
-            </div>
+            <div className="name">{space.name}({space.code})</div>
+            <div className="building">{locationLabel}</div>
             <div className="rec-meta">
               <div className="pair">
                 <span>정원</span>

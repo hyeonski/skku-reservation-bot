@@ -125,6 +125,23 @@ function hasSearchReadySlots(slots: FilledSlots | null | undefined): boolean {
   );
 }
 
+function mergeFilledSlots(
+  previous: FilledSlots | null | undefined,
+  next: FilledSlots,
+): FilledSlots {
+  if (!previous) return next;
+  return {
+    date: next.date ?? previous.date,
+    start_time: next.start_time ?? previous.start_time,
+    end_time: next.end_time ?? previous.end_time,
+    duration_min: next.duration_min ?? previous.duration_min,
+    headcount: next.headcount ?? previous.headcount,
+    campus: next.campus ?? previous.campus,
+    building: next.building ?? previous.building,
+    space: next.space ?? previous.space,
+  };
+}
+
 function hasSlotSearchCue(text: string): boolean {
   const normalized = text.replace(/\s+/g, '');
   return /(?:바꾸|변경|수정|정정|다시|아니|말고|대신|시간|시부터|까지|내일|모레|다음|월|일|캠퍼스|율전|명륜|건물|공간|명으로)/.test(normalized);
@@ -173,6 +190,7 @@ export function useConversation() {
             if (msg.status.kind === 'error') {
               next.lastError = msg.status.message;
               next.submitStep = null;
+              next.proposedCandidate = null;
             }
             if (msg.status.kind === 'done') next.submitStep = 'saved';
             if (msg.status.kind !== 'login_required') {
@@ -276,6 +294,7 @@ export function useConversation() {
         case 'BG_CANDIDATE_PROPOSAL': {
           if (msg.conversationId !== stateRef.current.conversationId) return;
           setState((s) => {
+            if (s.automationStatus.kind === 'error') return s;
             if (!s.candidates.some((candidate) => candidate.glsSpaceCode === msg.candidate.glsSpaceCode)) {
               return s;
             }
@@ -361,6 +380,16 @@ export function useConversation() {
     }
 
     const parsed = res.result;
+    const shouldPreserveActiveSlots =
+      parsed.intent !== 'cancel' &&
+      parsed.intent !== 'out_of_scope' &&
+      parsed.intent !== 'request_alternative' &&
+      previousState.proposedCandidate !== null &&
+      !hasSlotSearchCue(trimmed) &&
+      !hasSearchReadySlots(parsed.filled_slots);
+    const nextSlots = shouldPreserveActiveSlots
+      ? mergeFilledSlots(previousState.slots, parsed.filled_slots)
+      : parsed.filled_slots;
     const assistantMessageTs = new Date().toISOString();
     const botMsg: UiMessage = {
       id: nowMessageId('m-a'),
@@ -378,7 +407,7 @@ export function useConversation() {
           ? null
           : parsed.intent === 'request_alternative'
             ? s.slots
-            : parsed.filled_slots,
+            : nextSlots,
       applicationState:
         parsed.intent === 'cancel'
           ? null

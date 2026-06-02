@@ -1,7 +1,12 @@
 import type { PopupToBackground } from '../../shared/messages';
 import * as apiClient from '../apiClient';
 import * as gls from '../glsCoordinator';
-import { contexts, pendingStarts, persistContexts } from '../contextStore';
+import {
+  contexts,
+  pendingStarts,
+  persistContexts,
+  type ConversationContext,
+} from '../contextStore';
 import {
   hydrateContextFromServer,
   hydrateContextFromSnapshot,
@@ -19,11 +24,14 @@ export async function handleGetStatus(
 ) {
   await rehydrationReady;
   await resumePendingStartIfReady(msg.conversationId);
-  let ctx =
-    contexts.get(msg.conversationId) ??
-    (await hydrateContextFromServer(msg.conversationId)) ??
-    (await hydrateContextFromSnapshot(msg.conversationId)) ??
-    (await hydrateContextFromSummary(msg.conversationId));
+  let ctx: ConversationContext | null = contexts.get(msg.conversationId) ?? null;
+  if (!ctx || ctx.history.length === 0) {
+    ctx =
+      (await hydrateContextFromServer(msg.conversationId)) ??
+      (await hydrateContextFromSnapshot(msg.conversationId)) ??
+      ctx ??
+      (await hydrateContextFromSummary(msg.conversationId));
+  }
   const localSummary = (await loadConversationIndex()).find(
     (item) => item.id === msg.conversationId,
   );

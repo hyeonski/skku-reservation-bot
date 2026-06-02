@@ -61,14 +61,25 @@ function minutesToTime(minutes: number): string {
   ).padStart(2, '0')}`;
 }
 
-function parseKoreanClock(text: string): string | null {
+type MeridiemContext = 'am' | 'pm' | null;
+
+function getMeridiemContext(time: string | null | undefined): MeridiemContext {
+  const minutes = timeToMinutes(time ?? null);
+  if (minutes == null) return null;
+  return minutes >= 12 * 60 ? 'pm' : 'am';
+}
+
+function parseKoreanClock(text: string, context: MeridiemContext = null): string | null {
   const match = text.match(/(?:오전|오후)?\s*(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?/);
   if (!match?.[1]) return null;
   let hour = Number.parseInt(match[1], 10);
   const minute = Number.parseInt(match[2] ?? '0', 10);
   if (!Number.isFinite(hour) || !Number.isFinite(minute)) return null;
+  const hasExplicitMeridiem = /오전|오후/.test(match[0]);
   if (/오후/.test(match[0]) && hour < 12) hour += 12;
   if (/오전/.test(match[0]) && hour === 12) hour = 0;
+  if (!hasExplicitMeridiem && context === 'pm' && hour < 12) hour += 12;
+  if (!hasExplicitMeridiem && context === 'am' && hour === 12) hour = 0;
   if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
 }
@@ -78,6 +89,47 @@ function addDaysToIso(date: string, days: number): string {
   if (Number.isNaN(d.getTime())) return date;
   d.setDate(d.getDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+function formatIsoDate(year: number, month: number, day: number): string | null {
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (
+    d.getUTCFullYear() !== year ||
+    d.getUTCMonth() !== month - 1 ||
+    d.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(
+    day,
+  ).padStart(2, '0')}`;
+}
+
+function parseExplicitDateEdit(text: string, baseDate: string | null | undefined): string | null {
+  if (!baseDate) return null;
+  const base = new Date(`${baseDate}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return null;
+  const baseYear = base.getUTCFullYear();
+  const baseMonth = base.getUTCMonth() + 1;
+
+  const monthDay = text.match(/(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (monthDay?.[2] && monthDay[3]) {
+    const year = monthDay[1] ? Number.parseInt(monthDay[1], 10) : baseYear;
+    return formatIsoDate(year, Number.parseInt(monthDay[2], 10), Number.parseInt(monthDay[3], 10));
+  }
+
+  const numeric = text.match(/(?:(20\d{2})[./-])?(\d{1,2})[./-](\d{1,2})(?!\d)/);
+  if (numeric?.[2] && numeric[3]) {
+    const year = numeric[1] ? Number.parseInt(numeric[1], 10) : baseYear;
+    return formatIsoDate(year, Number.parseInt(numeric[2], 10), Number.parseInt(numeric[3], 10));
+  }
+
+  const dayOnly = text.match(/(?:^|[^\d])(\d{1,2})\s*일(?:[^\d]|$)/);
+  if (dayOnly?.[1] && !/\d{1,2}\s*월\s*\d{1,2}\s*일/.test(text)) {
+    return formatIsoDate(baseYear, baseMonth, Number.parseInt(dayOnly[1], 10));
+  }
+
+  return null;
 }
 
 export function applyRetrySlotAdjustment(
@@ -124,7 +176,13 @@ export function applyRetrySlotAdjustment(
     }
   }
 
-  if (/다음\s*주/.test(text) && next.date) {
+  const explicitDate = parseExplicitDateEdit(text, next.date);
+  if (explicitDate) {
+    if (explicitDate !== next.date) {
+      next.date = explicitDate;
+      changed = true;
+    }
+  } else if (/다음\s*주/.test(text) && next.date) {
     next.date = addDaysToIso(next.date, 7);
     changed = true;
   }
@@ -227,13 +285,23 @@ export function applyInlineSlotEdits(
 ): FilledSlots | null {
   if (!base) return null;
   const normalized = text.trim();
-  if (!/(바꾸|변경|수정|아니)/.test(normalized)) {
+  if (!/(바꾸|변경|수정|아니|다시|찾아)/.test(normalized)) {
     return null;
   }
 
   const next: FilledSlots = { ...base };
   let changed = false;
   let explicitSlotValue = false;
+  const meridiemContext = getMeridiemContext(base.start_time);
+
+  const explicitDate = parseExplicitDateEdit(normalized, base.date);
+  if (explicitDate) {
+    explicitSlotValue = true;
+    if (explicitDate !== next.date) {
+      next.date = explicitDate;
+      changed = true;
+    }
+  }
 
   const headcountMatch = normalized.match(/(\d+)\s*명/);
   if (headcountMatch?.[1]) {
@@ -251,8 +319,8 @@ export function applyInlineSlotEdits(
     /(\d{1,2})\s*시(?!간)(?:\s*\d{1,2}\s*분)?\s*(?:부터|[-–~])\s*(\d{1,2})\s*시(?!간)/,
   );
   if (rangeMatch?.[1] && rangeMatch[2]) {
-    const start = parseKoreanClock(`${rangeMatch[1]}시`);
-    const end = parseKoreanClock(`${rangeMatch[2]}시`);
+    const start = parseKoreanClock(`${rangeMatch[1]}시`, meridiemContext);
+    const end = parseKoreanClock(`${rangeMatch[2]}시`, meridiemContext);
     const startMin = timeToMinutes(start);
     const endMin = timeToMinutes(end);
     if (start && end && startMin != null && endMin != null && endMin > startMin) {
@@ -272,7 +340,7 @@ export function applyInlineSlotEdits(
     const startMatch = normalized.match(
       /(?:시간(?:은|을|는)?\s*)?((?:오전|오후)?\s*\d{1,2}\s*시(?!간)(?:\s*\d{1,2}\s*분)?)(?:\s*부터)?/,
     );
-    const start = startMatch?.[1] ? parseKoreanClock(startMatch[1]) : null;
+    const start = startMatch?.[1] ? parseKoreanClock(startMatch[1], meridiemContext) : null;
     if (start) {
       explicitSlotValue = true;
       if (start !== next.start_time) {

@@ -1,20 +1,16 @@
 import { useState } from 'react';
 import { ChatHeader } from './ChatHeader';
 import { ChatComposer } from './ChatComposer';
+import { getReservationExamples } from '../utils/reservationExamples';
 
 interface ChatStarterProps {
   onSendStarter: (text: string) => void;
   onBack: () => void;
 }
 
-const EXAMPLES = [
-  '내일 오후 6시 20명 학생회 회의',
-  '다음 주 화요일 14시부터 2시간 동아리 연습',
-  '5/27 오후 3시 200명 행사장',
-];
-
 export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
   const [value, setValue] = useState('');
+  const examples = getReservationExamples();
   const send = () => {
     const trimmed = value.trim();
     if (!trimmed) return;
@@ -43,7 +39,7 @@ export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
             빠른 예시
           </div>
           <div className="example-list">
-            {EXAMPLES.map((ex) => (
+            {examples.map((ex) => (
               <button
                 key={ex}
                 type="button"
