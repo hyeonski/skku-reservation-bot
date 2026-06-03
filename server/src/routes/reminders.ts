@@ -24,6 +24,7 @@ function toDto(row: Reminder): z.infer<typeof ReminderDto> {
       date: row.proposedDate,
       time: `${row.startTime}–${row.endTime}`,
       space: row.spaceLabel ?? '이전 추천 공간',
+      spaceCode: row.spaceCode ?? null,
       group: row.organization,
       event: row.eventName,
       prompt: row.prompt,
@@ -56,6 +57,7 @@ async function generateReminder(app: FastifyInstance, clientId: string): Promise
       lastFilledSlots: true,
       confirmedReservationForm: true,
       confirmedSpaceLabel: true,
+      confirmedSpaceCode: true,
       updatedAt: true,
     },
     orderBy: { updatedAt: 'desc' },
@@ -70,6 +72,7 @@ async function generateReminder(app: FastifyInstance, clientId: string): Promise
         slots: slotsParsed.success ? slotsParsed.data : null,
         formData: parseStoredReservationForm(row.confirmedReservationForm),
         confirmedSpaceLabel: row.confirmedSpaceLabel,
+        confirmedSpaceCode: row.confirmedSpaceCode,
       };
     }),
   );
@@ -98,6 +101,7 @@ async function generateReminder(app: FastifyInstance, clientId: string): Promise
         organization: candidate.organization,
         eventName: candidate.eventName,
         spaceLabel: candidate.spaceLabel,
+        spaceCode: candidate.spaceCode,
         prompt: candidate.prompt,
       },
     });

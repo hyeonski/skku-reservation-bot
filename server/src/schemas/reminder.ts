@@ -12,6 +12,7 @@ export const ReminderDto = z.object({
     date: z.string(),
     time: z.string(),
     space: z.string(),
+    spaceCode: z.string().nullable(),
     group: z.string(),
     event: z.string(),
     prompt: z.string(),

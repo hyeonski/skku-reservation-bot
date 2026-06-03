@@ -108,6 +108,7 @@ export interface ReminderDto {
     date: string;
     time: string;
     space: string;
+    spaceCode: string | null;
     group: string;
     event: string;
     prompt: string;
@@ -161,4 +162,5 @@ export interface SpaceCandidate {
   contents: string | null;
   limitTimeHHMM: string | null;
   isUserOrgPreferred: boolean;
+  personalizationReason?: string | null;
 }

@@ -9,6 +9,7 @@ export interface ReminderPatternInput {
   slots: FilledSlots | null;
   formData: ReservationFormData | null;
   confirmedSpaceLabel?: string | null;
+  confirmedSpaceCode?: string | null;
 }
 
 export interface ReminderCandidate {
@@ -22,6 +23,7 @@ export interface ReminderCandidate {
   organization: string;
   eventName: string;
   spaceLabel: string | null;
+  spaceCode: string | null;
   prompt: string;
 }
 
@@ -35,6 +37,7 @@ interface GroupEntry {
   organization: string;
   eventName: string;
   spaceLabel: string | null;
+  spaceCode: string | null;
 }
 
 function normalizeWhitespace(text: string): string {
@@ -113,7 +116,15 @@ function toEntry(source: ReminderPatternInput): GroupEntry | null {
     organization,
     eventName,
     spaceLabel: normalizeWhitespace(source.confirmedSpaceLabel ?? '') || null,
+    spaceCode: normalizeWhitespace(source.confirmedSpaceCode ?? '') || null,
   };
+}
+
+function buildSpacePrompt(spaceLabel: string | null, spaceCode: string | null): string {
+  if (spaceLabel && spaceCode) return ` 지난번처럼 ${spaceLabel} ${spaceCode}호`;
+  if (spaceCode) return ` 공간코드 ${spaceCode}`;
+  if (spaceLabel) return ` 지난번처럼 ${spaceLabel}`;
+  return '';
 }
 
 export function todayKstIso(now = new Date()): string {
@@ -152,7 +163,7 @@ export function buildReminderCandidate(
   const prompt =
     `${proposedDate} ${latest.startTime}부터 ${latest.endTime}까지 ` +
     `${latest.headcount}명 ${latest.organization} ${latest.eventName} 예약해줘` +
-    (latest.spaceLabel ? ` 지난번처럼 ${latest.spaceLabel}` : '');
+    buildSpacePrompt(latest.spaceLabel, latest.spaceCode);
 
   return {
     patternKey: best.key,
@@ -165,6 +176,7 @@ export function buildReminderCandidate(
     organization: latest.organization,
     eventName: latest.eventName,
     spaceLabel,
+    spaceCode: latest.spaceCode,
     prompt,
   };
 }

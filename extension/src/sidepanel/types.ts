@@ -47,6 +47,7 @@ export interface ReminderData {
     date: string;
     time: string;
     space: string;
+    spaceCode: string | null;
     group: string;
     event: string;
     prompt: string;
@@ -71,6 +72,7 @@ export interface SpaceSummary {
   useJojikName?: string;
   contents?: string | null;
   limitTimeHHMM?: string | null;
+  personalizationReason?: string | null;
 }
 
 export interface RecommendationSlots {

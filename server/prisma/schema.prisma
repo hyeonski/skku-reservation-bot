@@ -20,6 +20,7 @@ model Client {
   lastSeenAt    DateTime       @updatedAt @map("last_seen_at")
   conversations Conversation[]
   reminders     Reminder[]
+  spaceFeedbackEvents SpaceFeedbackEvent[]
 
   @@map("client")
 }
@@ -37,6 +38,10 @@ enum ReminderStatus {
   active
   dismissed
   accepted
+}
+
+enum SpaceFeedbackEventType {
+  rejected_candidate
 }
 
 model Conversation {
@@ -85,6 +90,7 @@ model Reminder {
   organization String @db.VarChar(191)
   eventName    String @map("event_name") @db.VarChar(191)
   spaceLabel   String? @map("space_label") @db.VarChar(191)
+  spaceCode    String? @map("space_code") @db.VarChar(40)
   prompt       String @db.Text
 
   createdAt   DateTime  @default(now()) @map("created_at")
@@ -95,6 +101,24 @@ model Reminder {
   @@unique([clientId, patternKey, proposedDate])
   @@index([clientId, status, proposedDate])
   @@map("reminder")
+}
+
+// ---------- 공간 선호/비선호 이벤트 ----------
+
+model SpaceFeedbackEvent {
+  id             String                 @id @default(uuid()) @db.Char(36)
+  clientId       String                 @map("client_id") @db.Char(36)
+  client         Client                 @relation(fields: [clientId], references: [id])
+  conversationId String                 @map("conversation_id") @db.Char(36)
+  spaceCode      String                 @map("space_code") @db.VarChar(40)
+  eventType      SpaceFeedbackEventType @map("event_type")
+  date           String?                @db.VarChar(10)
+  startTime      String?                @map("start_time") @db.VarChar(5)
+  createdAt      DateTime               @default(now()) @map("created_at")
+
+  @@index([clientId, spaceCode, eventType, createdAt])
+  @@index([clientId, conversationId, spaceCode, eventType])
+  @@map("space_feedback_event")
 }
 
 // ---------- 공간 메타데이터 (D-022) ----------

@@ -98,6 +98,7 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
     contents: c.contents,
     limitTimeHHMM: c.limitTimeHHMM,
+    personalizationReason: c.personalizationReason ?? null,
   };
 }
 

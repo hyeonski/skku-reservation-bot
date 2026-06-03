@@ -61,6 +61,12 @@ export function RecommendationCard({
                 </div>
               )}
             </div>
+            {space.personalizationReason && (
+              <div className="rec-reason">
+                <span>추천 이유</span>
+                <span>{space.personalizationReason}</span>
+              </div>
+            )}
             {space.contents && <div className="rec-note">{space.contents}</div>}
           </div>
         </div>

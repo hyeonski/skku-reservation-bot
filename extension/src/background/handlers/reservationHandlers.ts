@@ -1,4 +1,5 @@
 import type { PopupToBackground } from '../../shared/messages';
+import type { SpaceCandidate } from '../../shared/types';
 import * as apiClient from '../apiClient';
 import * as gls from '../glsCoordinator';
 import {
@@ -21,6 +22,26 @@ import {
   summarizeSpaceLabel,
 } from '../automationState';
 import { broadcastToSidepanel, makeStatusEmitter } from '../statusBus';
+
+function recordRejectedCandidateFeedback(
+  conversationId: string,
+  candidate: SpaceCandidate | null | undefined,
+): void {
+  if (!candidate?.glsSpaceCode) return;
+  const ctx = getOrCreateContext(conversationId);
+  const slots = resolveSearchSlots(ctx);
+  void apiClient
+    .recordSpaceFeedback({
+      conversationId,
+      spaceCode: candidate.glsSpaceCode,
+      eventType: 'rejected_candidate',
+      date: slots?.date ?? null,
+      startTime: slots?.startTime ?? null,
+    })
+    .catch((error) => {
+      console.warn('[SW] space feedback recording failed:', error);
+    });
+}
 
 export async function resumePendingStartIfReady(conversationId: string): Promise<void> {
   const ctx = getOrCreateContext(conversationId);
@@ -133,6 +154,12 @@ export async function handleRejectCandidate(
   msg: Extract<PopupToBackground, { type: 'POPUP_REJECT_CANDIDATE' }>,
 ): Promise<void> {
   const emit = makeStatusEmitter(msg.conversationId);
+  const queue = gls.getQueue(msg.conversationId);
+  const ctx = getOrCreateContext(msg.conversationId);
+  recordRejectedCandidateFeedback(
+    msg.conversationId,
+    queue?.lastProposed ?? ctx.lastProposed,
+  );
   void gls.continueAfterRejection(msg.conversationId, emit, broadcastToSidepanel).catch((e) => {
     emit({ kind: 'error', message: (e as Error).message });
   });
@@ -161,6 +188,7 @@ export async function handleConfirm(
   const candidate = queue?.lastProposed ?? ctx.lastProposed;
 
   if (!msg.confirmed) {
+    recordRejectedCandidateFeedback(msg.conversationId, candidate);
     void gls.continueAfterRejection(msg.conversationId, emit, broadcastToSidepanel).catch((e) => {
       emit({ kind: 'error', message: (e as Error).message });
     });

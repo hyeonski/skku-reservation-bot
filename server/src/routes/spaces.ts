@@ -13,6 +13,7 @@
  *
  * 정렬:
  * - userOrgCode가 주어지면 useJojikCode 일치 항목 우선 (isUserOrgPreferred=true 먼저)
+ * - 완료 예약 이력 기반 개인화 점수 내림차순
  * - 그 다음 capacityMax 오름차순 (인원에 가까운 공간 우선 — 공간 효율, D-013)
  */
 
@@ -20,6 +21,12 @@ import type { FastifyInstance } from 'fastify';
 import type { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 
+import {
+  RECENT_COMPLETED_CONVERSATION_LIMIT,
+  RECENT_SPACE_FEEDBACK_EVENT_DAYS,
+  RECENT_SPACE_FEEDBACK_EVENT_LIMIT,
+  sortSpacesByPersonalizedHistory,
+} from '../application/spacePersonalization.js';
 import { ListSpacesQuery, SpaceDto } from '../schemas/space.js';
 
 /**
@@ -43,7 +50,16 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
       },
     },
     async (req) => {
-      const { headcount, campusCode, buildingNo, building, space, userOrgCode } = req.query;
+      const {
+        headcount,
+        campusCode,
+        buildingNo,
+        building,
+        space,
+        userOrgCode,
+        date,
+        startTime,
+      } = req.query;
       const normalizedSpace = space?.trim().replace(/\s+/g, '').replace(/호$/, '');
       const spaceCodeFilter =
         normalizedSpace && /^[0-9A-Za-z]{5,8}$/.test(normalizedSpace)
@@ -65,9 +81,8 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
               : {}),
         },
         // DB 단에서는 capacityMax 오름차순으로 정렬해두고,
-        // userOrg 우선순위는 메모리에서 안정 정렬로 한 번 더 처리한다.
+        // userOrg/개인화 우선순위는 메모리에서 안정 정렬로 처리한다.
         orderBy: { capacityMax: 'asc' },
-        take: MAX_RESULTS,
       });
 
       const dtos = rows.map((row) => ({
@@ -84,6 +99,7 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
         limitTimeHHMM: row.limitTimeHHMM,
         isUserOrgPreferred:
           userOrgCode != null && row.useJojikCode === userOrgCode,
+        personalizationReason: null,
       }));
 
       if (userOrgCode) {
@@ -94,7 +110,86 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
         });
       }
 
-      return dtos;
+      const completedRows = await app.prisma.conversation.findMany({
+        where: {
+          clientId: req.clientId,
+          status: 'completed',
+          deletedAt: null,
+          confirmedSpaceCode: { not: null },
+        },
+        orderBy: [
+          { completedAt: 'desc' },
+          { updatedAt: 'desc' },
+        ],
+        take: RECENT_COMPLETED_CONVERSATION_LIMIT,
+        select: {
+          confirmedSpaceCode: true,
+          confirmedSpaceLabel: true,
+          lastFilledSlots: true,
+          completedAt: true,
+          updatedAt: true,
+        },
+      });
+      const feedbackCutoff = new Date(
+        Date.now() - RECENT_SPACE_FEEDBACK_EVENT_DAYS * 24 * 60 * 60 * 1000,
+      );
+      const softRejectRows = await app.prisma.spaceFeedbackEvent.findMany({
+        where: {
+          clientId: req.clientId,
+          eventType: 'rejected_candidate',
+          createdAt: { gte: feedbackCutoff },
+        },
+        orderBy: { createdAt: 'desc' },
+        take: RECENT_SPACE_FEEDBACK_EVENT_LIMIT,
+        select: {
+          spaceCode: true,
+          date: true,
+          startTime: true,
+          createdAt: true,
+        },
+      });
+
+      const confirmedSpaceCodes = [
+        ...new Set(
+          completedRows
+            .map((row) => row.confirmedSpaceCode)
+            .filter((code): code is string => code != null && code.trim().length > 0),
+        ),
+      ];
+      const confirmedSpaces = confirmedSpaceCodes.length > 0
+        ? await app.prisma.space.findMany({
+            where: { glsSpaceCode: { in: confirmedSpaceCodes } },
+            select: {
+              glsSpaceCode: true,
+              buildingNo: true,
+              buildingName: true,
+            },
+          })
+        : [];
+      const confirmedSpaceByCode = new Map(
+        confirmedSpaces.map((row) => [row.glsSpaceCode, row]),
+      );
+
+      const personalized = sortSpacesByPersonalizedHistory(
+        dtos,
+        completedRows.flatMap((row) => {
+          if (!row.confirmedSpaceCode) return [];
+          const confirmedSpace = confirmedSpaceByCode.get(row.confirmedSpaceCode);
+          return [{
+            confirmedSpaceCode: row.confirmedSpaceCode,
+            confirmedSpaceLabel: row.confirmedSpaceLabel,
+            confirmedBuildingNo: confirmedSpace?.buildingNo ?? null,
+            confirmedBuildingName: confirmedSpace?.buildingName ?? null,
+            lastFilledSlots: row.lastFilledSlots,
+            completedAt: row.completedAt,
+            updatedAt: row.updatedAt,
+          }];
+        }),
+        softRejectRows,
+        { date, startTime },
+      );
+
+      return personalized.slice(0, MAX_RESULTS);
     },
   );
 }

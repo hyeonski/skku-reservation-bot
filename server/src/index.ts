@@ -17,6 +17,7 @@ import { parseRoute } from './routes/parse.js';
 import { conversationsRoute } from './routes/conversations.js';
 import { spacesRoute } from './routes/spaces.js';
 import { remindersRoute } from './routes/reminders.js';
+import { spaceFeedbackRoute } from './routes/spaceFeedback.js';
 
 async function main() {
   const isDev = process.env.NODE_ENV !== 'production';
@@ -62,6 +63,7 @@ async function main() {
   await app.register(conversationsRoute);
   await app.register(spacesRoute);
   await app.register(remindersRoute);
+  await app.register(spaceFeedbackRoute);
 
   await app.listen({ port: config.port, host: '0.0.0.0' });
   app.log.info(`SKKU reservation server listening on port ${config.port}`);

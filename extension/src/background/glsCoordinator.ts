@@ -150,15 +150,6 @@ export function markQueuesDirty(): void {
   void persistQueues();
 }
 
-function shuffleCandidates(candidates: SpaceCandidate[]): SpaceCandidate[] {
-  const shuffled = [...candidates];
-  for (let i = shuffled.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
-  }
-  return shuffled;
-}
-
 // ----- small chrome.* promise helpers -----
 
 async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
@@ -689,14 +680,14 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
 
   // fetch candidates (사전 주입 후보가 있으면 우선 사용)
   let candidates: SpaceCandidate[];
-  let preserveCandidateOrder = false;
   if (args.candidates && args.candidates.length > 0) {
     candidates = args.candidates;
-    preserveCandidateOrder = true;
   } else {
     try {
       candidates = await apiClient.listSpaces({
         headcount: slots.headcount,
+        date: slots.date,
+        startTime: slots.start_time,
         ...pickSearchFilters(slots),
       });
     } catch (e) {
@@ -710,8 +701,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     return;
   }
 
-  // Demo 단계에서는 다양한 공간을 빨리 검증할 수 있도록 시도 순서를 랜덤화한다.
-  const orderedCandidates = preserveCandidateOrder ? [...candidates] : shuffleCandidates(candidates);
+  const orderedCandidates = [...candidates];
 
   const startHour = parseHourFromHHMM(slots.start_time);
   const endHour = parseHourFromHHMM(endTime);

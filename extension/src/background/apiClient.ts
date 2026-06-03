@@ -89,6 +89,16 @@ export interface ListSpacesArgs {
   building?: string;
   space?: string;
   userOrgCode?: string;
+  date?: string;
+  startTime?: string;
+}
+
+export interface RecordSpaceFeedbackArgs {
+  conversationId: string;
+  spaceCode: string;
+  eventType: 'rejected_candidate';
+  date?: string | null;
+  startTime?: string | null;
 }
 
 class ApiError extends Error {
@@ -190,7 +200,16 @@ export async function listSpaces(args: ListSpacesArgs): Promise<SpaceCandidate[]
   if (args.building) params.set('building', args.building);
   if (args.space) params.set('space', args.space);
   if (args.userOrgCode) params.set('userOrgCode', args.userOrgCode);
+  if (args.date) params.set('date', args.date);
+  if (args.startTime) params.set('startTime', args.startTime);
   return request<SpaceCandidate[]>(`/spaces?${params.toString()}`, { method: 'GET' });
+}
+
+export async function recordSpaceFeedback(args: RecordSpaceFeedbackArgs): Promise<void> {
+  await request<{ ok: true; created: boolean }>('/space-feedback', {
+    method: 'POST',
+    body: JSON.stringify(args),
+  });
 }
 
 export { ApiError };

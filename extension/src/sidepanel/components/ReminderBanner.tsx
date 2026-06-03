@@ -10,6 +10,12 @@ interface ReminderBannerProps {
 
 export function ReminderBanner({ reminder, onAccept, onDismiss }: ReminderBannerProps) {
   if (!reminder) return null;
+  const spaceText = reminder.proposed.spaceCode
+    ? reminder.proposed.space === '이전 추천 공간'
+      ? reminder.proposed.spaceCode
+      : `${reminder.proposed.space} ${reminder.proposed.spaceCode}`
+    : reminder.proposed.space;
+
   return (
     <div className="reminder-banner">
       <div className="label">
@@ -29,7 +35,7 @@ export function ReminderBanner({ reminder, onAccept, onDismiss }: ReminderBanner
         </span>
         <span className="pattern-pill">
           <Icon name="building" size={11} />
-          {reminder.proposed.space}
+          {spaceText}
         </span>
       </div>
       <div className="actions">
