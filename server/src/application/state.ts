@@ -160,7 +160,7 @@ function isNegative(text: string): boolean {
 }
 
 function isHangsaClarificationAnswer(text: string): boolean {
-  const normalized = normalizeWhitespace(text);
+  const normalized = normalizeWhitespace(text).replace(/\s*(?:이야|야|입니다|이에요|예요|맞아|맞아요)$/u, '');
   return /^(?:학생회|동아리|학생회\s*\/\s*동아리|학생회\s*또는\s*동아리|학과|학부|전공|세미나|스터디)(?:\s*(?:행사|주관|모임|활동))?$/.test(
     normalized,
   );

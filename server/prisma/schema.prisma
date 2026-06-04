@@ -116,8 +116,8 @@ model SpaceFeedbackEvent {
   startTime      String?                @map("start_time") @db.VarChar(5)
   createdAt      DateTime               @default(now()) @map("created_at")
 
-  @@index([clientId, spaceCode, eventType, createdAt])
-  @@index([clientId, conversationId, spaceCode, eventType])
+  @@index([clientId, spaceCode, eventType, createdAt], map: "sfe_client_space_event_created_idx")
+  @@index([clientId, conversationId, spaceCode, eventType], map: "sfe_client_conversation_space_event_idx")
   @@map("space_feedback_event")
 }
 

@@ -9,8 +9,8 @@ CREATE TABLE `space_feedback_event` (
     `start_time` VARCHAR(5) NULL,
     `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
-    INDEX `space_feedback_event_client_id_space_code_event_type_created_at_idx`(`client_id`, `space_code`, `event_type`, `created_at`),
-    INDEX `space_feedback_event_client_id_conversation_id_space_code_event_type_idx`(`client_id`, `conversation_id`, `space_code`, `event_type`),
+    INDEX `sfe_client_space_event_created_idx`(`client_id`, `space_code`, `event_type`, `created_at`),
+    INDEX `sfe_client_conversation_space_event_idx`(`client_id`, `conversation_id`, `space_code`, `event_type`),
     PRIMARY KEY (`id`)
 ) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 

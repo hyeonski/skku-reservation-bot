@@ -45,15 +45,18 @@ export const clientIdPlugin = fp(async function clientIdPlugin(app: FastifyInsta
     const id = parsed.data;
 
     try {
-      await app.prisma.client.upsert({
-        where: { id },
-        update: { lastSeenAt: new Date() },
-        create: { id },
-      });
+      await app.prisma.client.create({ data: { id } });
     } catch (err) {
-      req.log.error({ err }, 'failed to upsert Client');
-      reply.code(500).send({ error: 'client upsert failed' });
-      return reply;
+      if (typeof err === 'object' && err !== null && 'code' in err && err.code === 'P2002') {
+        await app.prisma.client.update({
+          where: { id },
+          data: { lastSeenAt: new Date() },
+        });
+      } else {
+        req.log.error({ err }, 'failed to upsert Client');
+        reply.code(500).send({ error: 'client upsert failed' });
+        return reply;
+      }
     }
 
     req.clientId = id;
