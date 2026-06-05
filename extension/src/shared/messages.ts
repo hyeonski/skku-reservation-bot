@@ -265,6 +265,7 @@ export interface ContentAvailabilityResult {
   spaceCode: string;
   available: boolean;
   loginRequired?: boolean;
+  timedOut?: boolean;
   conflicts?: Array<{ kind: '수업' | '예약' | '대여' | '제외'; timeTerm: string; info: string }>;
 }
 

@@ -31,6 +31,7 @@ import type {
   PopupChatRequest,
   PopupStartSearch,
   PopupConfirmReservation,
+  PopupPreviewReservation,
   PopupRejectCandidate,
   PopupCancel,
   PopupOpenLoginTab,
@@ -546,6 +547,34 @@ export function useConversation() {
     }
   }, []);
 
+  const previewReservation = useCallback(async (formData: ReservationFormData) => {
+    const { conversationId, proposedCandidate } = stateRef.current;
+    if (!proposedCandidate) {
+      setState((s) => ({ ...s, lastError: '미리보기할 후보가 없습니다.' }));
+      return;
+    }
+    const msg: PopupPreviewReservation = {
+      type: 'POPUP_PREVIEW_RESERVATION',
+      conversationId,
+      spaceCode: proposedCandidate.glsSpaceCode,
+      formData,
+    };
+    setState((s) => ({ ...s, lastError: null }));
+    try {
+      await sendRuntime(msg);
+      const botMsg: UiMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: 'GLS 신청 화면에 미리보기를 채웠어요. 저장 전 내용을 확인해 주세요.',
+        ts: nowHHMM(),
+        isoTs: new Date().toISOString(),
+      };
+      setState((s) => ({ ...s, messages: [...s.messages, botMsg] }));
+    } catch (e) {
+      setState((s) => ({ ...s, lastError: (e as Error).message }));
+    }
+  }, []);
+
   const findAlternative = useCallback(async () => {
     const { conversationId } = stateRef.current;
     const msg: PopupRejectCandidate = {
@@ -707,6 +736,7 @@ export function useConversation() {
     state,
     sendMessage,
     confirmReservation,
+    previewReservation,
     findAlternative,
     openLoginTab,
     applySuggestedMemory,

@@ -12,7 +12,7 @@ const e2eSpaces = [
     campusName: '자연과학캠퍼스',
     buildingName: '반도체관',
     roomName: '첨단강의실',
-    capacityMin: 1,
+    capacityMin: 40,
     capacityMax: 120,
     useJojikName: '정보통신/소프트웨어융합/공과대학행정실',
     adminJojikName: '정보통신/소프트웨어융합/공과대학행정실',

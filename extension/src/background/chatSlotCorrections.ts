@@ -5,6 +5,9 @@ import type {
   ReservationFormData,
 } from '../shared/types';
 import { isSearchReady } from '../../../shared/reservation/slotPolicy';
+import {
+  candidateSupportsHeadcount as sharedCandidateSupportsHeadcount,
+} from '../shared/spaceCapacity';
 
 function hasAnyFilledSlot(slots: FilledSlots | null | undefined): boolean {
   if (!slots) return false;
@@ -399,6 +402,5 @@ export function candidateSupportsHeadcount(
   candidate: import('../shared/types').SpaceCandidate | null,
   headcount: number | null,
 ): boolean {
-  if (!candidate || headcount == null) return false;
-  return candidate.capacityMin <= headcount && headcount <= candidate.capacityMax;
+  return sharedCandidateSupportsHeadcount(candidate, headcount);
 }

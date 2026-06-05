@@ -51,6 +51,11 @@ const APPLICATION_COLLECTOR_PROMPT =
   '신청서에는 어떤 단체의 어떤 행사로 넣을까요? 예: 소프트웨어학과 학생회 정기회의';
 const APPLICATION_FIELD_LABEL_PATTERN =
   '(?:행사명|주관단체|단체|사용목적|목적|행사구분|행사인원|인원)';
+const APPLICATION_FIELD_STOP_LABELS = {
+  organization: '(?:행사명|사용목적|목적|행사구분|행사인원|인원)',
+  eventName: '(?:주관단체|단체|사용목적|목적|행사구분|행사인원|인원)',
+  purpose: '(?:행사명|주관단체|단체|행사구분|행사인원|인원)',
+} as const;
 
 export interface ConversationMemoryCandidate {
   conversationId: string;
@@ -299,10 +304,11 @@ function extractOrganization(text: string): string | null {
 function extractExplicitField(
   text: string,
   label: string,
+  stopLabels: string = APPLICATION_FIELD_LABEL_PATTERN,
 ): string | null {
   const match = text.match(
     new RegExp(
-      `${label}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?\\s*(.+?)(?=\\s*(?:그리고|,|;)?\\s*${APPLICATION_FIELD_LABEL_PATTERN}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?|$)`,
+      `${label}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?\\s*(.+?)(?=\\s*(?:그리고|,|;)?\\s*${stopLabels}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?|$)`,
     ),
   );
   if (!match?.[1]) return null;
@@ -341,7 +347,11 @@ function extractFieldUpdates(
     filledSlots.headcount != null &&
     currentDraft.headcount !== filledSlots.headcount;
 
-  const organization = extractExplicitField(normalized, '(?:주관단체|단체)');
+  const organization = extractExplicitField(
+    normalized,
+    '(?:주관단체|단체)',
+    APPLICATION_FIELD_STOP_LABELS.organization,
+  );
   if (organization) {
     nextDraft.organization = organization;
     nextConfidence.organization = 'high';
@@ -349,7 +359,11 @@ function extractFieldUpdates(
     changed = true;
   }
 
-  const eventName = extractExplicitField(normalized, '행사명');
+  const eventName = extractExplicitField(
+    normalized,
+    '행사명',
+    APPLICATION_FIELD_STOP_LABELS.eventName,
+  );
   if (eventName) {
     nextDraft.eventName = eventName;
     nextConfidence.eventName = 'high';
@@ -357,7 +371,11 @@ function extractFieldUpdates(
     changed = true;
   }
 
-  const purpose = extractExplicitField(normalized, '(?:사용목적|목적)');
+  const purpose = extractExplicitField(
+    normalized,
+    '(?:사용목적|목적)',
+    APPLICATION_FIELD_STOP_LABELS.purpose,
+  );
   if (purpose) {
     nextDraft.purpose = purpose;
     nextConfidence.purpose = 'high';
@@ -424,7 +442,11 @@ function deriveDraftFromDescription(
   confidence.eventName = 'medium';
 
   draft.purpose =
-    extractExplicitField(normalized, '(?:사용목적|목적)') ??
+    extractExplicitField(
+      normalized,
+      '(?:사용목적|목적)',
+      APPLICATION_FIELD_STOP_LABELS.purpose,
+    ) ??
     `${normalized} 진행`;
   confidence.purpose = /(?:사용목적|목적)/.test(normalized) ? 'high' : 'medium';
 
@@ -695,6 +717,17 @@ export function buildApplicationState(
     : previousState.source;
   let suggestedMemory = previousState.suggested_memory;
   let assistantMessage = args.baseAssistantMessage;
+  const explicitReuseRequest = hasReuseSignal(latestUser);
+  let reuseMemoryMiss = false;
+
+  if (args.baseIntent === 'out_of_scope' && !args.readyToSearch) {
+    return {
+      intent: nextIntent,
+      assistantMessage,
+      applicationState: previousState,
+    };
+  }
+
   if (draftHeadcountChanged) {
     nextIntent = 'modify_application';
     suggestedMemory = null;
@@ -721,7 +754,25 @@ export function buildApplicationState(
     nextIntent = 'modify_application';
     assistantMessage = APPLICATION_COLLECTOR_PROMPT;
   } else {
-    const updates = extractFieldUpdates(latestUser, draft, args.filledSlots);
+    const reuseSuggestion = !suggestedMemory && explicitReuseRequest
+      ? pickSuggestedMemory(latestUser, args.memories)
+      : null;
+    if (reuseSuggestion) {
+      suggestedMemory = reuseSuggestion;
+      nextIntent = 'modify_application';
+      assistantMessage = suggestedMemory.label.startsWith('최근')
+        ? `${suggestedMemory.label}했어요. 같은 정보로 작성할까요?`
+        : `지난번 ${suggestedMemory.label} 정보를 추천할게요. 카드에서 선택하거나 새로 설명해 주세요.`;
+    } else if (!suggestedMemory && explicitReuseRequest) {
+      reuseMemoryMiss = true;
+      nextIntent = 'modify_application';
+      assistantMessage =
+        '지난 신청 정보를 찾지 못했어요. 새 예약 조건과 신청 정보를 알려주세요.';
+    }
+
+    const updates = !explicitReuseRequest
+      ? extractFieldUpdates(latestUser, draft, args.filledSlots)
+      : null;
     if (updates) {
       draft = updates.draft;
       confidence = updates.confidence;
@@ -740,8 +791,9 @@ export function buildApplicationState(
       nextIntent = 'modify_application';
       assistantMessage = '행사구분을 반영했어요. 아래 카드에서 확인해 주세요.';
     } else if (
-      isLikelyApplicationDescription(latestUser, args.history) ||
-      isApplicationCollectionFollowUp(latestUser, previousState)
+      !explicitReuseRequest &&
+      (isLikelyApplicationDescription(latestUser, args.history) ||
+        isApplicationCollectionFollowUp(latestUser, previousState))
     ) {
       const derived = deriveDraftFromDescription(latestUser, args.filledSlots, draft);
       if (derived) {
@@ -766,7 +818,7 @@ export function buildApplicationState(
     }
   }
 
-  if (!draft && !suggestedMemory) {
+  if (!reuseMemoryMiss && !draft && !suggestedMemory) {
     suggestedMemory = pickSuggestedMemory(latestUser, args.memories);
     if (suggestedMemory) {
       assistantMessage = suggestedMemory.label.startsWith('최근')
@@ -787,7 +839,7 @@ export function buildApplicationState(
   } else if (needsCollection && draft && missing.length === 1 && missing[0] === 'hangsaGbCode') {
     assistantMessage =
       '이 일정은 학생회/동아리 행사에 더 가깝나요, 학과 주관 행사에 더 가깝나요?';
-  } else if (!draft && !suggestedMemory && nextIntent === 'modify_application') {
+  } else if (!reuseMemoryMiss && !draft && !suggestedMemory && nextIntent === 'modify_application') {
     assistantMessage = APPLICATION_COLLECTOR_PROMPT;
   }
 

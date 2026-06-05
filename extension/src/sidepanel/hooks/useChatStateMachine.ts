@@ -71,7 +71,7 @@ const PHASE_HINTS: Record<ChatPhase, string[]> = {
   draft: ['제출', '행사명만 바꾸기', '다른 공간'],
   submitting: [],
   done: [],
-  'failed-retry': ['100명으로 줄여서 다시', '시간대 19–21시로', '다음 주 같은 요일로'],
+  'failed-retry': ['인원 조정해서 다시', '시간대 19–21시로', '다음 주 같은 요일로'],
   failed: [],
 };
 
@@ -126,6 +126,11 @@ function derivePhase(s: ConversationState): ChatPhase {
 
   // 3) idle / 첫 대화 — slots 누락 분기.
   if (s.messages.length === 0) return 'starter';
+  const draft = s.applicationState?.draft;
+  if (draft && !s.applicationState?.needs_application_collection) return 'draft';
+  if (s.applicationState?.suggested_memory) return 'meta-p2';
+  if (s.applicationState?.needs_application_collection) return 'meta-collect';
+
   const missing = new Set(s.missingRequired);
   if (missing.has('headcount')) return 'slots-count';
   if (missing.has('end_time') || missing.has('duration_min')) return 'slots-end';

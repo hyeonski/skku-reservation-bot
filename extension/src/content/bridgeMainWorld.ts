@@ -539,6 +539,49 @@ declare global {
     return false;
   }
 
+  function activePopupContainsText(text: string): boolean {
+    const nodes = document.querySelectorAll<HTMLElement>('div, textarea, input, span, p');
+    for (const node of nodes) {
+      if (!isVisible(node) || !isInActivePopup(node)) continue;
+      const value =
+        node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+          ? node.value
+          : '';
+      const content = String(node.innerText || node.textContent || value || '').trim();
+      if (content.includes(text)) return true;
+    }
+    return false;
+  }
+
+  function visibleGlsValidationMessage(): string | null {
+    const patterns = [
+      /최소인원/,
+      /최대인원/,
+      /인원 항목/,
+      /Number of people/i,
+      /필수/,
+      /입력/,
+      /저장할 수 없습니다/,
+      /신청할 수 없습니다/,
+    ];
+    const nodes = document.querySelectorAll<HTMLElement>('div, textarea, span, p');
+    for (const node of nodes) {
+      if (!isVisible(node) || !isInActivePopup(node)) continue;
+      const value =
+        node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
+          ? node.value
+          : '';
+      const content = String(node.innerText || node.textContent || value || '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!content || content.length > 500) continue;
+      if (patterns.some((pattern) => pattern.test(content))) {
+        return content;
+      }
+    }
+    return null;
+  }
+
   function readBlockingAlertText(): string {
     const nodes = document.querySelectorAll<HTMLElement>('div, textarea, span, p');
     for (const node of nodes) {
@@ -1593,6 +1636,11 @@ declare global {
         await wait(200);
         if (!popupKey()) return { ok: true };
         const okText =
+          activePopupContainsText('저장되었습니다.') ||
+          activePopupContainsText('정상적으로 저장되었습니다.') ||
+          activePopupContainsText('신청되었습니다.') ||
+          activePopupContainsText('실행되었습니다.') ||
+          activePopupContainsText('사용일 전일까지 담당자가 확인 후 처리할 예정이며') ||
           hasVisibleTextContaining('저장되었습니다.') ||
           hasVisibleTextContaining('정상적으로 저장되었습니다.') ||
           hasVisibleTextContaining('신청되었습니다.') ||
@@ -1619,6 +1667,10 @@ declare global {
             p = p.parentElement;
           }
           return { ok: false, error: msg || 'unknown error alert' };
+        }
+        const validationMessage = visibleGlsValidationMessage();
+        if (validationMessage) {
+          return { ok: false, error: `GLS 저장 실패: ${validationMessage}` };
         }
       }
       return { ok: false, error: 'submit result unknown (timeout)' };

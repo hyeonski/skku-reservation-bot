@@ -94,6 +94,24 @@ export async function runInPage<T = unknown>(
   });
 }
 
+async function withContentTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => {
+      reject(new Error(`${label} timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+  }
+}
+
 // ---------- chrome.runtime 메시지 라우터 ----------
 
 chrome.runtime.onMessage.addListener(
@@ -131,17 +149,21 @@ chrome.runtime.onMessage.addListener(
           }
           case 'BG_CHECK_AVAILABILITY': {
             const m = msg as BgCheckAvailability;
-            const r = await checkAvailability(
-              m.candidate,
-              m.date,
-              m.startHour,
-              m.endHour,
-              {
-                formData: m.formData,
-                startTime: m.startTime,
-                endTime: m.endTime,
-                strictPreview: m.strictPreview,
-              },
+            const r = await withContentTimeout(
+              checkAvailability(
+                m.candidate,
+                m.date,
+                m.startHour,
+                m.endHour,
+                {
+                  formData: m.formData,
+                  startTime: m.startTime,
+                  endTime: m.endTime,
+                  strictPreview: m.strictPreview,
+                },
+              ),
+              25000,
+              'GLS availability check',
             );
             const reply: ContentAvailabilityResult = {
               type: 'CONTENT_AVAILABILITY_RESULT',
@@ -203,17 +225,21 @@ chrome.runtime.onMessage.addListener(
           const m = msg as BgCheckAvailability;
           const loginRequired = message === 'LOGIN_REQUIRED' || !checkSession();
           const hiddenInGrid = message.includes('not in dsGrdMainNew');
+          const timedOut = message.includes('timeout');
           const reply: ContentAvailabilityResult = {
             type: 'CONTENT_AVAILABILITY_RESULT',
             spaceCode: m.candidate.glsSpaceCode,
             available: false,
             loginRequired,
+            timedOut,
             conflicts: [
               {
-                kind: hiddenInGrid ? ('제외' as const) : ('예약' as const),
+                kind: hiddenInGrid || timedOut ? ('제외' as const) : ('예약' as const),
                 timeTerm: '',
                 info: loginRequired
                   ? '로그인이 필요합니다. GLS 탭에서 로그인한 뒤 다시 시도해주세요.'
+                  : timedOut
+                    ? 'GLS 후보 검증이 오래 걸려 자동화를 중단했습니다. 같은 조건으로 다시 시도하거나 시간을 바꿔주세요.'
                   : hiddenInGrid
                     ? `시간표 미노출: 후보 공간 행을 GLS 시간표에서 찾지 못했습니다. (${message})`
                   : `error: ${message}`,

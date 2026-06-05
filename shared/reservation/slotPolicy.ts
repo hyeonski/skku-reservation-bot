@@ -10,7 +10,7 @@ export interface ReservationSlots {
 }
 
 const SUPPORTED_TIME_MINUTES = new Set([0, 30]);
-const MAX_FUTURE_BOOKING_DAYS = 180;
+const MAX_FUTURE_BOOKING_MONTHS = 2;
 const EARLIEST_GENERAL_RESERVATION_START_MINUTES = 8 * 60;
 const LATEST_GENERAL_RESERVATION_END_MINUTES = 23 * 60;
 
@@ -94,6 +94,7 @@ function toClockMinutes(
 interface ContextualMeridiemRange {
   startMinutes: number;
   endMinutes: number;
+  startIndex: number;
   endIndex: number;
 }
 
@@ -109,9 +110,50 @@ function extractContextualMeridiemRange(text: string): ContextualMeridiemRange |
 
   const endText = `${match[5]}시`;
   const endIndex = text.indexOf(endText, (match.index ?? 0) + match[0].indexOf(match[5]));
+  const startText = `${match[2]}시`;
+  const startIndex = text.indexOf(startText, match.index ?? 0);
   return {
     startMinutes,
     endMinutes,
+    startIndex,
+    endIndex,
+  };
+}
+
+function extractBareEveningHalfHourRange(text: string): ContextualMeridiemRange | null {
+  const rangePattern =
+    /(\d{1,2})\s*시\s*반\s*(?:부터|[-–~])\s*(\d{1,2})\s*시(?!간)(?:\s*(?:(반)|([0-5]?\d)\s*분))?/;
+  const match = rangePattern.exec(text);
+  if (!match?.[1] || !match[2]) return null;
+
+  const startHour = Number.parseInt(match[1], 10);
+  const endHour = Number.parseInt(match[2], 10);
+  const endMinute = match[3] ? 30 : match[4] ? Number.parseInt(match[4], 10) : 0;
+  if (
+    !Number.isFinite(startHour) ||
+    !Number.isFinite(endHour) ||
+    !Number.isFinite(endMinute) ||
+    startHour < 1 ||
+    startHour > 11 ||
+    endHour < 1 ||
+    endHour > 11 ||
+    endMinute < 0 ||
+    endMinute > 59 ||
+    endHour <= startHour
+  ) {
+    return null;
+  }
+
+  const startMinutes = (startHour + 12) * 60 + 30;
+  const endMinutes = (endHour + 12) * 60 + endMinute;
+  const startText = `${match[1]}시`;
+  const endText = `${match[2]}시`;
+  const startIndex = text.indexOf(startText, match.index ?? 0);
+  const endIndex = text.indexOf(endText, (match.index ?? 0) + match[0].indexOf(match[2]));
+  return {
+    startMinutes,
+    endMinutes,
+    startIndex,
     endIndex,
   };
 }
@@ -120,7 +162,7 @@ export function applyContextualMeridiemRange<T extends ReservationSlots>(
   slots: T,
   text: string,
 ): T {
-  const range = extractContextualMeridiemRange(text);
+  const range = extractContextualMeridiemRange(text) ?? extractBareEveningHalfHourRange(text);
   if (!range) return slots;
 
   const startTime = minutesToTime(range.startMinutes);
@@ -188,14 +230,18 @@ export function usesUnsupportedReservationMinute(
 }
 
 export function hasAmbiguousBareMeridiemTime(text: string): boolean {
-  const contextualRange = extractContextualMeridiemRange(text);
+  const contextualRange = extractContextualMeridiemRange(text) ?? extractBareEveningHalfHourRange(text);
   const matches = text.matchAll(/(\d{1,2})\s*시(?!간)(?:\s*([0-5]?\d)\s*분)?/g);
   for (const match of matches) {
     const hour = Number.parseInt(match[1] ?? '', 10);
     if (!Number.isFinite(hour) || hour < 1 || hour > 12) continue;
 
     const startIndex = match.index ?? 0;
-    if (contextualRange && startIndex === contextualRange.endIndex) {
+    if (
+      contextualRange &&
+      startIndex >= contextualRange.startIndex &&
+      startIndex <= contextualRange.endIndex
+    ) {
       continue;
     }
 
@@ -239,16 +285,47 @@ function isoDateToEpochDay(value: string): number | null {
   return Math.floor(time / 86_400_000);
 }
 
+function parseIsoDateParts(value: string): { year: number; month: number; day: number } | null {
+  const date = parseIsoDateOnly(value);
+  const match = date?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match?.[1] || !match[2] || !match[3]) return null;
+  const year = Number.parseInt(match[1], 10);
+  const month = Number.parseInt(match[2], 10);
+  const day = Number.parseInt(match[3], 10);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  return { year, month, day };
+}
+
+function formatIsoDate(year: number, month: number, day: number): string {
+  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(
+    day,
+  ).padStart(2, '0')}`;
+}
+
+export function getFutureBookingWindowEndDate(
+  now: string,
+  monthsAhead = MAX_FUTURE_BOOKING_MONTHS,
+): string | null {
+  const today = parseIsoDateParts(now);
+  if (!today) return null;
+  const lastDayOfTargetMonth = new Date(Date.UTC(today.year, today.month + monthsAhead, 0));
+  return formatIsoDate(
+    lastDayOfTargetMonth.getUTCFullYear(),
+    lastDayOfTargetMonth.getUTCMonth() + 1,
+    lastDayOfTargetMonth.getUTCDate(),
+  );
+}
+
 export function isBeyondFutureBookingWindow(
   slots: ReservationSlots | null | undefined,
   now: string,
-  maxFutureBookingDays = MAX_FUTURE_BOOKING_DAYS,
+  monthsAhead = MAX_FUTURE_BOOKING_MONTHS,
 ): boolean {
   if (!slots?.date) return false;
-  const today = parseIsoDateOnly(now);
-  if (!today) return false;
-  const todayDay = isoDateToEpochDay(today);
+  const windowEndDate = getFutureBookingWindowEndDate(now, monthsAhead);
+  if (!windowEndDate) return false;
+  const windowEndDay = isoDateToEpochDay(windowEndDate);
   const slotDay = isoDateToEpochDay(slots.date);
-  if (todayDay == null || slotDay == null) return false;
-  return slotDay - todayDay > maxFutureBookingDays;
+  if (windowEndDay == null || slotDay == null) return false;
+  return slotDay > windowEndDay;
 }

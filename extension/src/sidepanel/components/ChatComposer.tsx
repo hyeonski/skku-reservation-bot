@@ -10,6 +10,19 @@ interface ChatComposerProps {
   disabled?: boolean;
 }
 
+function endsWithHangulJamo(text: string): boolean {
+  const last = Array.from(text.trimEnd()).at(-1);
+  if (!last) return false;
+  const code = last.codePointAt(0);
+  if (code == null) return false;
+  return (
+    (code >= 0x1100 && code <= 0x11ff) ||
+    (code >= 0x3130 && code <= 0x318f) ||
+    (code >= 0xa960 && code <= 0xa97f) ||
+    (code >= 0xd7b0 && code <= 0xd7ff)
+  );
+}
+
 /**
  * auto-grow textarea (22~90px) + 전송 버튼.
  * Enter = 전송, Shift+Enter = 줄바꿈.
@@ -22,6 +35,7 @@ export function ChatComposer({
   disabled = false,
 }: ChatComposerProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
 
   // auto-grow: 컨텐츠에 맞춰 height 갱신 (min 22, max 90).
   useLayoutEffect(() => {
@@ -35,10 +49,15 @@ export function ChatComposer({
   const canSend = !disabled && value.trim().length > 0;
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      if (canSend) onSend();
-    }
+    if (e.key !== 'Enter' || e.shiftKey) return;
+
+    const isComposing =
+      composingRef.current ||
+      e.nativeEvent.isComposing ||
+      endsWithHangulJamo(value);
+    e.preventDefault();
+    if (isComposing) return;
+    if (canSend) onSend();
   };
 
   return (
@@ -49,6 +68,12 @@ export function ChatComposer({
         placeholder={placeholder}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value)}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          composingRef.current = false;
+        }}
         onKeyDown={onKeyDown}
         rows={1}
       />

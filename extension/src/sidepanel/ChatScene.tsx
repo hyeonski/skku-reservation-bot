@@ -11,7 +11,7 @@
  *   no_candidate                    | SearchProgressCard frozen + NoSpaceCard
  *
  * 추가:
- *   applicationState.draft 있음 + proposedCandidate 있음 → DraftCard
+ *   applicationState.draft 완성됨 → DraftCard
  *   applicationState.suggested_memory 있음 + draft 아직 없음 → P2SuggestCard
  */
 
@@ -249,14 +249,15 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     return null;
   }, [state.messages]);
   const showDraft =
-    activeRecommendationValid &&
+    applicationComplete &&
     draft !== null &&
     state.submitStep === null &&
     state.automationStatus.kind !== 'done';
   const showCompletedDraft =
     applicationComplete &&
     (state.submitStep === 'saved' || state.automationStatus.kind === 'done');
-  const currentDraftActive = activeRecommendationValid || showCompletedDraft;
+  const currentDraftActive = showDraft || showCompletedDraft;
+  const canSubmitDraft = applicationComplete && !!proposed;
   const showP2 =
     view.phase === 'meta-p2' && !!suggestedMemory;
   const showLogin = !!state.loginPrompt;
@@ -264,15 +265,25 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
   const submitStep = state.submitStep;
   const showPreparingSearchCard =
     state.automationStatus.kind === 'opening_gls' && state.candidates.length === 0;
-  const visibleHints = manualHints ?? view.hints;
   const noSpaceSummary = useMemo(() => {
     const date = state.slots?.date ?? '';
     const start = state.slots?.start_time ?? '';
     const end = state.slots?.end_time ?? '';
     const headcount = state.slots?.headcount != null ? `${state.slots.headcount}명` : '';
     if (!date && !start && !headcount) return undefined;
-    return `${date} ${start}${end ? `–${end}` : ''}, ${headcount} 조건으로 확인했지만 지금은 맞는 공간이 없었습니다.`;
+    const base = `${date} ${start}${end ? `–${end}` : ''}, ${headcount} 조건으로 확인했지만 지금은 맞는 공간이 없었습니다.`;
+    if (state.slots?.building || state.slots?.space) {
+      return `${base} 건물/공간 조건을 빼고 같은 캠퍼스 전체로 넓혀볼 수 있어요.`;
+    }
+    return base;
   }, [state.slots]);
+  const visibleHints = useMemo(() => {
+    if (manualHints) return manualHints;
+    if (showNoSpace && (state.slots?.building || state.slots?.space)) {
+      return ['같은 캠퍼스 전체로 넓혀줘', '건물 조건 빼고 다시', ...view.hints];
+    }
+    return view.hints;
+  }, [manualHints, showNoSpace, state.slots, view.hints]);
 
   useEffect(() => {
     setManualHints(null);
@@ -503,8 +514,11 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
                 superseded ||
                 (submitStep === 'saved' || state.automationStatus.kind === 'done')
               }
-              canSubmit={applicationComplete}
+              canSubmit={canSubmitDraft}
               onSubmit={onSubmitDraft}
+              onPreview={() => {
+                if (draft) void conv.previewReservation(draft);
+              }}
               onEdit={onEditDraft}
             />
           );

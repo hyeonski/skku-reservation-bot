@@ -18,6 +18,8 @@ export const ParseRequest = z.object({
   conversation_id: z.string().uuid(),
   history: z.array(ChatMessage),
   now: z.string().datetime({ offset: true }),
+  client_last_filled_slots: z.lazy(() => FilledSlots).nullable().optional(),
+  client_last_application_state: z.lazy(() => ApplicationState).nullable().optional(),
 });
 export type ParseRequest = z.infer<typeof ParseRequest>;
 

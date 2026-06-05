@@ -1,7 +1,8 @@
 import type { ReservationFormData } from '../../shared/types';
+import { HANGSA_CODES } from '@gls/nexacroPaths';
 
 type DraftEdit = {
-  field: 'event' | 'group' | 'purpose' | 'headcount';
+  field: 'event' | 'group' | 'purpose' | 'headcount' | 'category';
   value: string;
 };
 
@@ -44,6 +45,38 @@ function extractLabeledEdit(
   return { field, value };
 }
 
+function classifyHangsaEdit(value: string): string | null {
+  const normalized = value.trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+
+  if (/(학생\s*회|총학생회|동아리|동연|동아리\s*연합|자치)/.test(normalized)) {
+    return HANGSA_CODES.교내단체행사_학생회동아리;
+  }
+  if (/(보충\s*수업|특강|시험|고사|퀴즈)/.test(normalized)) {
+    return HANGSA_CODES.보충수업특강시험;
+  }
+  if (/(세미나|스터디)/.test(normalized)) {
+    return HANGSA_CODES.교내단체행사_세미나스터디;
+  }
+  if (/(학과|학부|전공|연구실|랩|교수|수업)/.test(normalized)) {
+    return HANGSA_CODES.학과주관행사;
+  }
+  if (/(단과대|대학\s*학생회|대학\s*행사)/.test(normalized)) {
+    return HANGSA_CODES.단과대학주관행사;
+  }
+  if (/(본부|행정실|입학처|교무|학생지원|센터)/.test(normalized)) {
+    return HANGSA_CODES.본부부서주관행사;
+  }
+  if (/(교외|외부|기업|협력사)/.test(normalized)) {
+    return HANGSA_CODES.교외단체행사;
+  }
+  if (/기타/.test(normalized)) {
+    return HANGSA_CODES.기타;
+  }
+
+  return null;
+}
+
 function isStandaloneAlternativeCommand(text: string): boolean {
   return /^(?:다른\s*(?:공간|곳|후보|방)(?:\s*(?:보여|찾아|찾|추천|줘|주세요|보여줘|찾아줘))?|대안\s*(?:공간|후보)?\s*(?:보여|찾아|찾|추천|줘|주세요|보여줘|찾아줘)|여러\s*개(?:\s*(?:같이|한꺼번에|동시에))?\s*(?:보여|찾아|추천|줘|주세요|보여줘|찾아줘)|비교(?:해줘|해주세요|해|))\s*[.!?。]*$/.test(
     text.trim(),
@@ -81,6 +114,7 @@ export function parseModification(text: string): DraftCommand {
 
   const edits = [
     extractLabeledEdit(t, '행사명', 'event'),
+    extractLabeledEdit(t, '행사\\s*구분', 'category'),
     extractLabeledEdit(t, '(?:주관\\s*단체|단체)', 'group'),
     extractLabeledEdit(t, '(?:사용\\s*목적|목적)', 'purpose'),
   ].filter((edit): edit is DraftEdit => edit !== null);
@@ -149,6 +183,13 @@ export function applyDraftModification(
         next = { ...next, purpose: edit.value };
         changed = true;
         break;
+      case 'category': {
+        const hangsaGbCode = classifyHangsaEdit(edit.value);
+        if (!hangsaGbCode) break;
+        next = { ...next, hangsaGbCode };
+        changed = true;
+        break;
+      }
       case 'headcount': {
         const parsed = Number.parseInt(edit.value.replace(/\D/g, ''), 10);
         if (!Number.isFinite(parsed) || parsed <= 0) break;

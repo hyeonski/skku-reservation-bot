@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { buildReminderCandidate, type ReminderPatternInput } from '../src/application/reminders.js';
+import { buildApplicationState } from '../src/application/state.js';
 
 process.env.LLM_API_KEY ??= 'verify-only';
 process.env.DATABASE_URL ??= 'mysql://user:password@localhost:3306/verify';
@@ -28,7 +29,7 @@ function input(
       space: null,
     },
     formData: {
-      hangsaGbCode: '01',
+      hangsaGbCode: '113',
       organization: 'SW학생회',
       eventName: '운영회의',
       headcount: 20,
@@ -54,14 +55,45 @@ assert.equal(
 );
 assert.match(
   repeatedWithCode.prompt,
-  /지난번처럼 반도체관 400126호/,
-  'label and code prompt includes an explicit room-code phrase',
+  /공간코드 400126 \(반도체관\)/,
+  'label and code prompt includes an explicit room-code phrase without reuse wording',
 );
 assert.equal(
   __parseRouteTestables.extractExplicitSpaceCode(repeatedWithCode.prompt),
   '400126',
   'parse explicit space code override can extract the reminder prompt code',
 );
+{
+  const application = buildApplicationState({
+    history: [{ role: 'user', content: repeatedWithCode.prompt, ts: new Date().toISOString() }],
+    latestUserMessage: repeatedWithCode.prompt,
+    baseIntent: 'modify_slot',
+    baseAssistantMessage: '요청을 확인했어요.',
+    filledSlots: {
+      date: repeatedWithCode.proposedDate,
+      start_time: repeatedWithCode.startTime,
+      end_time: repeatedWithCode.endTime,
+      duration_min: 120,
+      headcount: repeatedWithCode.headcount,
+      campus: null,
+      building: null,
+      space: null,
+    },
+    readyToSearch: true,
+    previousState: null,
+    memories: [],
+  });
+  assert.equal(
+    application.applicationState.draft?.eventName,
+    '운영회의',
+    'accept-reminder prompt keeps the event name as the stored form value',
+  );
+  assert.equal(
+    application.applicationState.needs_application_collection,
+    false,
+    'accept-reminder prompt creates a complete application draft',
+  );
+}
 
 const repeatedCodeOnly = buildReminderCandidate(
   [
@@ -94,7 +126,7 @@ assert.ok(repeatedWithoutCode, 'null confirmedSpaceCode still creates a candidat
 assert.equal(repeatedWithoutCode.spaceCode, null);
 assert.match(
   repeatedWithoutCode.prompt,
-  /지난번처럼 학생회관 401호/,
+  /희망공간: 학생회관 401호/,
   'label-only prompt keeps the existing fallback phrase',
 );
 

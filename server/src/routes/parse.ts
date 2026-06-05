@@ -84,11 +84,15 @@ function makeOutOfScopeResult(): LLMParseResult {
   };
 }
 
-function makeInvalidInputResult(message: string, missingRequired: string[] = []): LLMParseResult {
+function makeInvalidInputResult(
+  message: string,
+  missingRequired: string[] = [],
+  intent: LLMParseResult['intent'] = 'new_reservation',
+): LLMParseResult {
   return {
     filled_slots: makeEmptySlots(),
     missing_required: missingRequired,
-    intent: 'new_reservation',
+    intent,
     ready_to_search: false,
     assistant_message: message,
   };
@@ -135,6 +139,63 @@ function localMinutesFromIso(value: string): number | null {
   return hour * 60 + minute;
 }
 
+function extractExplicitHeadcount(text: string): number | null {
+  let latest: number | null = null;
+  const matches = text.replace(/,/g, '').matchAll(/(^|[^\d])(\d{1,4})\s*명/g);
+  for (const match of matches) {
+    const value = Number.parseInt(match[2] ?? '', 10);
+    if (Number.isFinite(value) && value > 0) latest = value;
+  }
+  return latest;
+}
+
+function applyExplicitHeadcountOverride(
+  result: LLMParseResult,
+  text: string,
+): LLMParseResult {
+  const headcount = extractExplicitHeadcount(text);
+  if (headcount == null || result.filled_slots.headcount === headcount) return result;
+  return {
+    ...result,
+    filled_slots: {
+      ...result.filled_slots,
+      headcount,
+    },
+  };
+}
+
+function extractExplicitKoreanClockMinutes(text: string): number | null {
+  const match = text.match(
+    /(오전|오후|아침|점심|낮|저녁|밤|새벽)?\s*(\d{1,2})\s*시(?!간)(?:\s*(반|[0-5]?\d\s*분))?/,
+  );
+  if (!match?.[2]) return null;
+  let hour = Number.parseInt(match[2], 10);
+  let minute = 0;
+  if (match[3]) {
+    minute = match[3].includes('반')
+      ? 30
+      : Number.parseInt(match[3].replace(/\D/g, ''), 10);
+  }
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || hour < 0 || hour > 24) {
+    return null;
+  }
+  const meridiem = match[1];
+  if (/(오후|점심|낮|저녁|밤)/.test(meridiem ?? '') && hour < 12) hour += 12;
+  if (/(오전|아침|새벽)/.test(meridiem ?? '') && hour === 12) hour = 0;
+  if (hour === 24 && minute !== 0) return null;
+  return hour * 60 + minute;
+}
+
+function isPastTodayRequest(text: string, now: string): boolean {
+  if (!/오늘/.test(text)) return false;
+  const today = parseIsoDateOnly(now);
+  const nowDate = parseIsoDateOnly(now);
+  if (!today || today !== nowDate) return false;
+  const nowMinutes = localMinutesFromIso(now);
+  const requestedMinutes = extractExplicitKoreanClockMinutes(text);
+  return nowMinutes != null && requestedMinutes != null && requestedMinutes <= nowMinutes;
+}
+
 function isPastSlot(slots: FilledSlotsType, now: string): boolean {
   if (!slots.date) return false;
   const today = parseIsoDateOnly(now);
@@ -152,6 +213,7 @@ function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMPa
   return makeInvalidInputResult(
     '지난 날짜나 이미 지난 시간으로는 예약할 수 없어요. 오늘 이후의 날짜와 시간을 다시 알려주세요.',
     ['date'],
+    'out_of_scope',
   );
 }
 
@@ -160,6 +222,7 @@ function applyFutureBookingWindowOverride(result: LLMParseResult, now: string): 
   return makeInvalidInputResult(
     '너무 먼 날짜는 아직 GLS에서 신청 가능 여부를 안정적으로 확인하기 어려워요. 가까운 날짜로 다시 알려주세요.',
     ['date'],
+    'out_of_scope',
   );
 }
 
@@ -192,7 +255,6 @@ function applyStudentCenterCampusClarification(
   text: string,
 ): LLMParseResult {
   const building = result.filled_slots.building?.trim();
-  if (building !== '학생회관') return result;
   if (!/학생\s*회관/.test(text)) return result;
   if (hasExplicitStudentCenterCampus(text)) return result;
 
@@ -201,6 +263,7 @@ function applyStudentCenterCampusClarification(
     filled_slots: {
       ...result.filled_slots,
       campus: null,
+      building: building === '학생회관' ? result.filled_slots.building : null,
     },
     missing_required: Array.from(new Set([...result.missing_required, 'campus'])),
     ready_to_search: false,
@@ -311,7 +374,7 @@ function applyAmbiguousMeridiemSlotOverride(
   };
 }
 
-function makeImpossibleInputResult(text: string): LLMParseResult | null {
+function makeImpossibleInputResult(text: string, now: string): LLMParseResult | null {
   if (hasImpossibleHeadcount(text)) {
     return makeInvalidInputResult(
       '사용 인원은 1명 이상이어야 해요. 실제 사용할 인원을 다시 알려주세요.',
@@ -334,6 +397,13 @@ function makeImpossibleInputResult(text: string): LLMParseResult | null {
     return makeInvalidInputResult(
       '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
       ['start_time'],
+    );
+  }
+  if (isPastTodayRequest(text, now)) {
+    return makeInvalidInputResult(
+      '지난 날짜나 이미 지난 시간으로는 예약할 수 없어요. 오늘 이후의 날짜와 시간을 다시 알려주세요.',
+      ['date'],
+      'out_of_scope',
     );
   }
   return null;
@@ -539,6 +609,8 @@ export const __parseRouteTestables = {
   applyStudentCenterCampusClarification,
   applyStudentCouncilBuildingDisambiguation,
   applyTimeGranularityOverride,
+  applyExplicitHeadcountOverride,
+  extractExplicitHeadcount,
   hasAmbiguousBareMeridiemTime,
   hasUnsupportedMinuteUnit,
   hasImpossibleClock,
@@ -590,13 +662,18 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
 
       const latestUserMessage =
         [...body.history].reverse().find((message) => message.role === 'user')?.content ?? '';
-      const previousFilledSlots = parseStoredFilledSlots(existing?.lastFilledSlots ?? null);
+      const previousFilledSlots =
+        parseStoredFilledSlots(existing?.lastFilledSlots ?? null) ??
+        parseStoredFilledSlots(body.client_last_filled_slots ?? null);
+      const previousApplicationState =
+        parseStoredApplicationState(existing?.lastApplicationState ?? null) ??
+        parseStoredApplicationState(body.client_last_application_state ?? null);
 
       // 2) LLM 호출. 명백한 잡담은 LLM 실패에 의존하지 않고 로컬에서 안전하게 안내한다.
       let llmResult: LLMParseResult;
-      const impossibleInputResult = makeImpossibleInputResult(latestUserMessage);
+      const impossibleInputResult = makeImpossibleInputResult(latestUserMessage, body.now);
       if (impossibleInputResult) {
-        llmResult = impossibleInputResult;
+        llmResult = applyExplicitHeadcountOverride(impossibleInputResult, latestUserMessage);
       } else if (isSymbolOnlyInput(latestUserMessage)) {
         llmResult = makeInvalidInputResult(
           '예약할 날짜, 시간, 인원처럼 이해할 수 있는 내용으로 다시 알려주세요.',
@@ -607,6 +684,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       } else {
         try {
           llmResult = await parseWithLLM({ history: body.history, now: body.now });
+          llmResult = applyExplicitHeadcountOverride(llmResult, latestUserMessage);
           llmResult = applyStudentCouncilBuildingDisambiguation(llmResult, latestUserMessage);
           llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
@@ -686,7 +764,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         baseAssistantMessage: llmResult.assistant_message,
         filledSlots: llmResult.filled_slots,
         readyToSearch: llmResult.ready_to_search,
-        previousState: parseStoredApplicationState(existing?.lastApplicationState ?? null),
+        previousState: previousApplicationState,
         memories: memoryCandidates,
       });
 

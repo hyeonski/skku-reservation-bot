@@ -23,6 +23,10 @@ import {
   syncDraftHeadcountFromSlots,
 } from '../automationState';
 import { broadcastToSidepanel, makeStatusEmitter } from '../statusBus';
+import {
+  candidateSupportsHeadcount,
+  describeCapacityMismatch,
+} from '../../shared/spaceCapacity';
 
 function recordRejectedCandidateFeedback(
   conversationId: string,
@@ -236,6 +240,29 @@ export async function handleConfirm(
   const slots = resolveSearchSlots(ctx);
   if (!slots) {
     emit({ kind: 'error', message: '제출할 예약 슬롯을 복원하지 못했습니다.' });
+    return;
+  }
+  if (!candidateSupportsHeadcount(candidate, formData.headcount)) {
+    emit({ kind: 'error', message: describeCapacityMismatch(candidate, formData.headcount) });
+    return;
+  }
+  try {
+    const stillValid = await apiClient.listSpaces({
+      headcount: formData.headcount,
+      space: candidate.glsSpaceCode,
+    });
+    if (!stillValid.some((space) => space.glsSpaceCode === candidate.glsSpaceCode)) {
+      emit({
+        kind: 'error',
+        message: describeCapacityMismatch(candidate, formData.headcount),
+      });
+      return;
+    }
+  } catch (error) {
+    emit({
+      kind: 'error',
+      message: `제출 직전 정원 검증 실패: ${(error as Error).message}`,
+    });
     return;
   }
 

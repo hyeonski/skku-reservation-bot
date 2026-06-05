@@ -48,6 +48,10 @@ import type {
  */
 export type CoordinatorBroadcast = BgSearchStarted | BgCandidateResult | BgSubmitStatus;
 import * as apiClient from './apiClient';
+import {
+  candidateSupportsHeadcount,
+  describeCapacityMismatch,
+} from '../shared/spaceCapacity';
 
 const GLS_URL = 'https://kingoinfo.skku.edu/';
 const GLS_URL_MATCH = 'https://kingoinfo.skku.edu/*';
@@ -213,13 +217,17 @@ function getAutomationMessageType(msg: unknown): string {
 function automationMessageTimeoutMs(msg: unknown): number {
   switch (getAutomationMessageType(msg)) {
     case 'BG_CHECK_AVAILABILITY':
-      return 30000;
+      return 25000;
     case 'BG_CLEAR_PREVIEW_FORM':
     case 'BG_READ_FORM_SNAPSHOT':
       return 10000;
     default:
       return 60000;
   }
+}
+
+function isTimeoutMessage(message: string): boolean {
+  return /timed out|timeout/i.test(message);
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -633,6 +641,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     onStatusChange({ kind: 'error', message: 'headcount이 비어 있습니다.' });
     return;
   }
+  const requestedHeadcount = slots.headcount;
   // LLM 이 end_time 대신 duration_min 만 채우는 경우가 있어 정규화.
   const endTime = deriveEndTime(slots);
   if (!slots.date || !slots.start_time || !endTime) {
@@ -727,7 +736,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
   } else {
     try {
       candidates = await apiClient.listSpaces({
-        headcount: slots.headcount,
+        headcount: requestedHeadcount,
         date: slots.date,
         startTime: slots.start_time,
         ...pickSearchFilters(slots),
@@ -737,9 +746,30 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
       return;
     }
   }
+  const capacityRejected = candidates.filter(
+    (candidate) => !candidateSupportsHeadcount(candidate, requestedHeadcount),
+  );
+  if (capacityRejected.length > 0) {
+    candidates = candidates.filter((candidate) => candidateSupportsHeadcount(candidate, requestedHeadcount));
+  }
 
   if (candidates.length === 0) {
-    onStatusChange({ kind: 'no_candidate', log: [] });
+    onStatusChange({
+      kind: 'no_candidate',
+      log: capacityRejected.map((candidate) => ({
+        glsSpaceCode: candidate.glsSpaceCode,
+        buildingName: candidate.buildingName,
+        roomName: candidate.roomName,
+        available: false,
+        conflicts: [
+          {
+            kind: '정원',
+            timeTerm: '',
+            info: describeCapacityMismatch(candidate, requestedHeadcount),
+          },
+        ],
+      })),
+    });
     return;
   }
 
@@ -752,7 +782,7 @@ export async function runReservationFlow(args: RunReservationFlowArgs): Promise<
     conversationId,
     tabId,
     date: slots.date,
-    requestedHeadcount: slots.headcount,
+    requestedHeadcount,
     startHour,
     endHour,
     startTime: slots.start_time,
@@ -835,6 +865,38 @@ async function searchNext(
         void persistQueues();
         return;
       }
+      if (isTimeoutMessage(message)) {
+        queues.delete(state.conversationId);
+        activeStatusEmitters.delete(state.conversationId);
+        state.log.push({
+          glsSpaceCode: candidate.glsSpaceCode,
+          buildingName: candidate.buildingName,
+          roomName: candidate.roomName,
+          available: false,
+          conflicts: [
+            {
+              kind: '제외',
+              timeTerm: '',
+              info: `검증 시간 초과: ${message}`,
+            },
+          ],
+        });
+        emitBroadcast({
+          type: 'BG_CANDIDATE_RESULT',
+          conversationId: state.conversationId,
+          spaceCode: candidate.glsSpaceCode,
+          available: false,
+          why: '검증 시간 초과',
+          currentIdx: state.triedCount - 1,
+          total: state.totalCount,
+        });
+        onStatusChange({
+          kind: 'error',
+          message: 'GLS 후보 검증이 오래 걸려 자동화를 중단했어요. 같은 조건으로 다시 시도하거나 날짜/시간을 바꿔주세요.',
+        });
+        void persistQueues();
+        return;
+      }
       // Transient content error — 로그에 실패로 남기고 다음 후보로.
       state.log.push({
         glsSpaceCode: candidate.glsSpaceCode,
@@ -874,8 +936,27 @@ async function searchNext(
       conflicts: result.conflicts ?? [],
     });
 
+    if (result.timedOut) {
+      queues.delete(state.conversationId);
+      activeStatusEmitters.delete(state.conversationId);
+      emitBroadcast({
+        type: 'BG_CANDIDATE_RESULT',
+        conversationId: state.conversationId,
+        spaceCode: candidate.glsSpaceCode,
+        available: false,
+        why: '검증 시간 초과',
+        currentIdx: state.triedCount - 1,
+        total: state.totalCount,
+      });
+      onStatusChange({
+        kind: 'error',
+        message: 'GLS 후보 검증이 오래 걸려 자동화를 중단했어요. 같은 조건으로 다시 시도하거나 날짜/시간을 바꿔주세요.',
+      });
+      void persistQueues();
+      return;
+    }
+
     if (result.loginRequired) {
-      await chrome.tabs.update(state.tabId, { active: true }).catch(() => {});
       // 로그인 만료 — 사이드패널이 GLSLoginCard 를 띄울 수 있도록 알린다.
       emitBroadcast({
         type: 'BG_CANDIDATE_RESULT',

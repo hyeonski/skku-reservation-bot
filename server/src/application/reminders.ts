@@ -34,8 +34,10 @@ interface GroupEntry {
   startTime: string;
   endTime: string;
   headcount: number;
+  hangsaGbCode: string;
   organization: string;
   eventName: string;
+  purpose: string;
   spaceLabel: string | null;
   spaceCode: string | null;
 }
@@ -90,6 +92,20 @@ function groupKeyOf(entry: GroupEntry): string {
   ].join('|');
 }
 
+function hangsaLabelOf(code: string): string | null {
+  const labels: Record<string, string> = {
+    '111': '학생회/동아리',
+    '113': '세미나/스터디',
+    '115': '보충수업/특강/시험',
+    '112': '본부부서주관행사',
+    '114': '단과대학주관행사',
+    '116': '학과주관행사',
+    '001': '교외단체행사',
+    '117': '기타',
+  };
+  return labels[code] ?? null;
+}
+
 function toEntry(source: ReminderPatternInput): GroupEntry | null {
   const slots = source.slots;
   const formData = source.formData;
@@ -101,6 +117,7 @@ function toEntry(source: ReminderPatternInput): GroupEntry | null {
 
   const organization = normalizeWhitespace(formData.organization);
   const eventName = normalizeWhitespace(formData.eventName);
+  const purpose = normalizeWhitespace(formData.purpose);
   if (!organization || !eventName) return null;
 
   const headcount = slots.headcount ?? formData.headcount;
@@ -113,17 +130,19 @@ function toEntry(source: ReminderPatternInput): GroupEntry | null {
     startTime: slots.start_time,
     endTime: slots.end_time,
     headcount,
+    hangsaGbCode: normalizeWhitespace(formData.hangsaGbCode),
     organization,
     eventName,
+    purpose,
     spaceLabel: normalizeWhitespace(source.confirmedSpaceLabel ?? '') || null,
     spaceCode: normalizeWhitespace(source.confirmedSpaceCode ?? '') || null,
   };
 }
 
 function buildSpacePrompt(spaceLabel: string | null, spaceCode: string | null): string {
-  if (spaceLabel && spaceCode) return ` 지난번처럼 ${spaceLabel} ${spaceCode}호`;
+  if (spaceLabel && spaceCode) return ` 공간코드 ${spaceCode} (${spaceLabel})`;
   if (spaceCode) return ` 공간코드 ${spaceCode}`;
-  if (spaceLabel) return ` 지난번처럼 ${spaceLabel}`;
+  if (spaceLabel) return ` 희망공간: ${spaceLabel}`;
   return '';
 }
 
@@ -160,10 +179,15 @@ export function buildReminderCandidate(
   const proposedDate = nextWeeklyDateAfter(latest.date, todayIso);
   const weekdayLabel = WEEKDAYS_KO[latest.weekday] ?? '같은 요일';
   const spaceLabel = latest.spaceLabel ?? '이전 추천 공간';
+  const hangsaLabel = hangsaLabelOf(latest.hangsaGbCode);
+  const purpose = latest.purpose || `${latest.eventName} 진행`;
   const prompt =
-    `${proposedDate} ${latest.startTime}부터 ${latest.endTime}까지 ` +
-    `${latest.headcount}명 ${latest.organization} ${latest.eventName} 예약해줘` +
-    buildSpacePrompt(latest.spaceLabel, latest.spaceCode);
+    `${proposedDate} ${latest.startTime}부터 ${latest.endTime}까지 ${latest.headcount}명 예약해줘` +
+    `${buildSpacePrompt(latest.spaceLabel, latest.spaceCode)}. ` +
+    `주관단체: ${latest.organization}. ` +
+    `행사명: ${latest.eventName}. ` +
+    (hangsaLabel ? `행사구분: ${hangsaLabel}. ` : '') +
+    `사용목적: ${purpose}.`;
 
   return {
     patternKey: best.key,

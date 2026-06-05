@@ -12,6 +12,8 @@ const REPEAT_SCHEDULE_PATTERN = /매주|매달|매월|매일|격주|정기적으
 const REPEAT_RESERVATION_PATTERN = /(?:반복|정기)\s*(?:예약|신청|대여|사용|일정|패턴)/;
 const RESERVATION_REPEAT_PATTERN =
   /(?:예약|신청|대여|사용|빌리|잡아|잡아줘|잡아\s*줘).{0,12}(?:반복|정기)|(?:반복|정기).{0,12}(?:예약|신청|대여|사용|빌리|잡아|잡아줘|잡아\s*줘)/;
+const APPLICATION_FIELD_LABEL_PATTERN =
+  '(?:주관단체|단체|행사명|행사구분|사용목적|목적|행사인원|인원)';
 
 type ApplicationLengthIssue = {
   field: 'eventName' | 'purpose';
@@ -24,8 +26,23 @@ function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+function repeatPolicyText(text: string): string {
+  const lineFiltered = text
+    .split('\n')
+    .filter((line) => !/^\s*(?:주관단체|행사명|행사구분|사용목적)\s*:/.test(line))
+    .join('\n');
+
+  return lineFiltered.replace(
+    new RegExp(
+      `${APPLICATION_FIELD_LABEL_PATTERN}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?\\s*.*?(?=\\s*(?:그리고|,|;)?\\s*${APPLICATION_FIELD_LABEL_PATTERN}(?:만|은|는|을|를)?(?=\\s|[:：]|$)\\s*[:：]?|$)`,
+      'g',
+    ),
+    ' ',
+  );
+}
+
 function hasRepeatReservationCondition(text: string): boolean {
-  const normalized = normalizeWhitespace(text);
+  const normalized = normalizeWhitespace(repeatPolicyText(text));
   if (!normalized) return false;
   if (REPEAT_SCHEDULE_PATTERN.test(normalized)) return true;
   if (REPEAT_RESERVATION_PATTERN.test(normalized)) return true;
@@ -169,7 +186,7 @@ export function applyChatSafetyOverride(
       ready_to_search: false,
       assistant_message:
         '빔프로젝터, 화이트보드 같은 시설·장비 조건은 아직 GLS에서 자동 확인할 수 없어요. 날짜, 시간, 인원 기준으로만 찾을 수 있습니다.',
-      application_state: previousApplicationState ?? result.application_state,
+      application_state: previousApplicationState ?? emptyApplicationState(),
     };
   }
 
