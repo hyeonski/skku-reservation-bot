@@ -7,6 +7,7 @@ import {
   type CompletedSpaceHistoryEntry,
   type SoftRejectedSpaceEvent,
 } from '../src/application/spacePersonalization.js';
+import { getGeneralSmallHeadcountCapacityMax } from '../src/application/spaceSizing.js';
 import type { SpaceDto } from '../src/schemas/space.js';
 
 function space(
@@ -362,6 +363,28 @@ assert.equal(
   slotBeatsBuilding[0]?.personalizationReason,
   '최근 같은 요일·시간대 예약에서 2회 사용',
   'same-slot reason reflects the repeated count',
+);
+
+// --- small-headcount general requests avoid oversized fallback spaces (UC-93) ---
+assert.equal(
+  getGeneralSmallHeadcountCapacityMax({ headcount: 2, hasExplicitLocation: false }),
+  24,
+  '2-person general requests cap candidates to small rooms',
+);
+assert.equal(
+  getGeneralSmallHeadcountCapacityMax({ headcount: 3, hasExplicitLocation: false }),
+  24,
+  '3-person general requests still use the small-room cap',
+);
+assert.equal(
+  getGeneralSmallHeadcountCapacityMax({ headcount: 4, hasExplicitLocation: false }),
+  null,
+  'larger general requests keep the normal candidate pool',
+);
+assert.equal(
+  getGeneralSmallHeadcountCapacityMax({ headcount: 2, hasExplicitLocation: true }),
+  null,
+  'explicit building or room requests bypass the small-room cap',
 );
 
 console.log('space personalization verification passed');

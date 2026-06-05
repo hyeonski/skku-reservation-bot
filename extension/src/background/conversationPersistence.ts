@@ -237,11 +237,24 @@ export async function hydrateContextFromSummary(
   return ctx;
 }
 
+function preferRuntimeStatus(
+  previous: ConversationContext['lastStatus'] | undefined,
+  snapshot: ConversationContext['lastStatus'] | undefined,
+): ConversationContext['lastStatus'] {
+  if (previous && previous.kind !== 'idle') return previous;
+  return snapshot ?? previous ?? { kind: 'idle' };
+}
+
 export async function hydrateContextFromServer(
   conversationId: string,
 ): Promise<ConversationContext | null> {
   try {
     const dto = await apiClient.getConversation(conversationId);
+    const previous = contexts.get(conversationId);
+    const got = await chrome.storage.local.get(`${SNAPSHOT_PREFIX}${conversationId}`);
+    const snapshot = got?.[`${SNAPSHOT_PREFIX}${conversationId}`] as
+      | Partial<Pick<ConversationContext, 'lastStatus' | 'lastProposed'>>
+      | undefined;
     const ctx = getOrCreateContext(conversationId);
     ctx.history = dto.history;
     ctx.title = dto.title;
@@ -253,9 +266,9 @@ export async function hydrateContextFromServer(
     ctx.confirmedSpaceCode = dto.confirmedSpaceCode;
     ctx.confirmedSpaceLabel = dto.confirmedSpaceLabel;
     ctx.updatedAt = dto.updatedAt;
-    ctx.lastStatus = { kind: 'idle' };
+    ctx.lastStatus = preferRuntimeStatus(previous?.lastStatus, snapshot?.lastStatus);
     ctx.pendingStart = null;
-    ctx.lastProposed = null;
+    ctx.lastProposed = previous?.lastProposed ?? snapshot?.lastProposed ?? null;
     ctx.loginPrompt = null;
     await persistContexts();
     await syncConversationSummaryFromContext(ctx);

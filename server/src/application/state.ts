@@ -199,7 +199,8 @@ function stripScheduleAndReservationWords(text: string): string {
   return normalizeWhitespace(
     text
       .replace(/\d{4}[-./]\d{1,2}[-./]\d{1,2}/g, ' ')
-      .replace(/\d{1,2}\s*월\s*\d{1,2}\s*일(?:\s*[월화수목금토일](?:요일)?)?/g, ' ')
+      .replace(/\d{1,2}\s*월\s*\d{1,2}\s*일(?:\s*\(?\s*[월화수목금토일](?:요일)?\s*\)?)?/g, ' ')
+      .replace(/\(\s*[월화수목금토일](?:요일)?\s*\)/g, ' ')
       .replace(/(?:오늘|내일|모레|이번\s*주|다음\s*주)\s*[월화수목금토일]?(?:요일)?/g, ' ')
       .replace(/(?:오전|오후)?\s*\d{1,2}\s*시(?!간)(?:\s*\d{1,2}\s*분)?(?:부터|까지)?/g, ' ')
       .replace(/\d+\s*(?:시간|분|명)/g, ' ')
@@ -287,7 +288,12 @@ function extractOrganization(text: string): string | null {
   const match =
     normalized.match(/(.+?(?:학생회|동아리|총학생회|학회|연구실|랩|센터|본부|행정실|팀))/) ??
     normalized.match(/(.+?(?:학과|학부|전공|위원회))/);
-  return match?.[1] ? normalizeWhitespace(match[1]) : null;
+  if (match?.[1]) return normalizeWhitespace(match[1]);
+
+  const bareMatch = normalized.match(
+    /^(학생회|동아리|총학생회|학회|연구실|랩|센터|본부|행정실|팀|학과|학부|전공|위원회)(?=\s|$)/,
+  );
+  return bareMatch?.[1] ?? null;
 }
 
 function extractExplicitField(
@@ -397,7 +403,7 @@ function deriveDraftFromDescription(
   filledSlots: FilledSlots,
   currentDraft: ReservationFormData | null,
 ): DraftUpdateResult | null {
-  const normalized = cleanSentenceEnding(text);
+  const normalized = cleanSentenceEnding(stripScheduleAndReservationWords(text));
   if (!normalized) return null;
   if (!hasMeaningfulApplicationText(normalized)) return null;
 

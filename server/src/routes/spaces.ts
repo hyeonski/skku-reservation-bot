@@ -27,6 +27,7 @@ import {
   RECENT_SPACE_FEEDBACK_EVENT_LIMIT,
   sortSpacesByPersonalizedHistory,
 } from '../application/spacePersonalization.js';
+import { getGeneralSmallHeadcountCapacityMax } from '../application/spaceSizing.js';
 import { ListSpacesQuery, SpaceDto } from '../schemas/space.js';
 
 /**
@@ -65,12 +66,19 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
         normalizedSpace && /^[0-9A-Za-z]{5,8}$/.test(normalizedSpace)
           ? normalizedSpace
           : null;
+      const smallHeadcountCapacityMax = getGeneralSmallHeadcountCapacityMax({
+        headcount,
+        hasExplicitLocation: Boolean(buildingNo || building || space),
+      });
 
       const rows = await app.prisma.space.findMany({
         where: {
           active: true,
           capacityMin: { lte: headcount },
-          capacityMax: { gte: headcount },
+          capacityMax: {
+            gte: headcount,
+            ...(smallHeadcountCapacityMax != null ? { lte: smallHeadcountCapacityMax } : {}),
+          },
           ...(campusCode ? { campusCode } : {}),
           ...(buildingNo ? { buildingNo } : {}),
           ...(building ? { buildingName: { contains: building } } : {}),

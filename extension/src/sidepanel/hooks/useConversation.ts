@@ -21,6 +21,7 @@ import type {
   AutomationStatus,
   ApplicationState,
   ChatMessage,
+  ConversationStatus,
   FilledSlots,
   ReservationFormData,
   SpaceCandidate,
@@ -52,9 +53,12 @@ export interface CandidateProgress {
 
 export interface ConversationState {
   conversationId: string;
+  conversationStatus: ConversationStatus;
   messages: UiMessage[];
   /** 마지막 /parse 결과의 슬롯 (LLM 추출). */
   slots: FilledSlots | null;
+  /** 마지막 /parse 결과의 필수 슬롯 누락 목록. */
+  missingRequired: string[];
   applicationState: ApplicationState | null;
   /** 사용자 메시지 송신 직후 ~ BG_CHAT_RESPONSE 도착 전까지 true (TypingIndicator). */
   parsing: boolean;
@@ -95,8 +99,10 @@ function formatHHMM(value?: string): string {
 function emptyState(conversationId: string): ConversationState {
   return {
     conversationId,
+    conversationStatus: 'active',
     messages: [],
     slots: null,
+    missingRequired: [],
     applicationState: null,
     parsing: false,
     automationStatus: { kind: 'idle' },
@@ -187,6 +193,10 @@ export function useConversation() {
           if (msg.conversationId !== stateRef.current.conversationId) return;
           setState((s) => {
             const next: Partial<ConversationState> = { automationStatus: msg.status };
+            if (msg.status.kind === 'searching' || msg.status.kind === 'opening_gls') {
+              next.proposedCandidate = null;
+              next.submitStep = null;
+            }
             if (msg.status.kind === 'error') {
               next.lastError = msg.status.message;
               next.submitStep = null;
@@ -360,13 +370,20 @@ export function useConversation() {
       lastError: null,
     }));
 
-    let res: { type: 'BG_CHAT_RESPONSE'; result: import('../../shared/types').ParseResult } | { error: string };
+    let res:
+      | {
+          type: 'BG_CHAT_RESPONSE';
+          result: import('../../shared/types').ParseResult;
+          status?: AutomationStatus;
+        }
+      | { error: string };
     try {
       const req: PopupChatRequest = {
         type: 'POPUP_CHAT_REQUEST',
         conversationId,
         history: historyForServer,
         latestMessage: trimmed,
+        clientSlots: previousState.slots,
       };
       res = await sendRuntime(req);
     } catch (e) {
@@ -402,18 +419,41 @@ export function useConversation() {
       ...s,
       messages: [...s.messages, botMsg],
       parsing: false,
+      conversationStatus: parsed.intent === 'cancel' ? 'abandoned_user' : 'active',
       slots:
         parsed.intent === 'cancel' || parsed.intent === 'out_of_scope'
           ? null
           : parsed.intent === 'request_alternative'
             ? s.slots
             : nextSlots,
+      missingRequired:
+        parsed.intent === 'cancel' || parsed.intent === 'out_of_scope'
+          ? []
+          : parsed.intent === 'request_alternative'
+            ? s.missingRequired
+            : parsed.missing_required,
       applicationState:
         parsed.intent === 'cancel'
           ? null
           : parsed.intent === 'request_alternative'
             ? s.applicationState
             : parsed.application_state,
+      ...(parsed.intent === 'request_alternative'
+        ? {
+            proposedCandidate: null,
+            submitStep: null,
+          }
+        : {}),
+      ...(parsed.intent === 'modify_slot' && parsed.ready_to_search
+        ? {
+            automationStatus: { kind: 'idle' as const },
+            candidates: [],
+            candidateResults: new Map<string, CandidateProgress>(),
+            currentIdx: -1,
+            proposedCandidate: null,
+            submitStep: null,
+          }
+        : {}),
       ...(parsed.intent === 'cancel'
         ? {
             automationStatus: { kind: 'idle' as const },
@@ -424,6 +464,20 @@ export function useConversation() {
             submitStep: null,
             loginPrompt: null,
           }
+        : res.status
+          ? {
+              automationStatus: res.status,
+              candidates: res.status.kind === 'no_candidate' ? [] : s.candidates,
+              candidateResults:
+                res.status.kind === 'no_candidate'
+                  ? new Map<string, CandidateProgress>()
+                  : s.candidateResults,
+              currentIdx: res.status.kind === 'no_candidate' ? -1 : s.currentIdx,
+              proposedCandidate:
+                res.status.kind === 'no_candidate' ? null : s.proposedCandidate,
+              submitStep: res.status.kind === 'no_candidate' ? null : s.submitStep,
+              loginPrompt: res.status.kind === 'login_required' ? s.loginPrompt : null,
+            }
         : {}),
     }));
 
@@ -445,8 +499,11 @@ export function useConversation() {
     }
 
     const shouldStartSearch =
-      (parsed.ready_to_search && (!previousState.proposedCandidate || hasSlotSearchCue(trimmed))) ||
-      (parsed.intent === 'modify_slot' && hasSearchReadySlots(parsed.filled_slots) && hasSlotSearchCue(trimmed));
+      parsed.ready_to_search &&
+      hasSearchReadySlots(parsed.filled_slots) &&
+      (!previousState.proposedCandidate ||
+        hasSlotSearchCue(trimmed) ||
+        parsed.intent === 'modify_slot');
     if (shouldStartSearch) {
       // 곧바로 background 에 검색 시작 요청. 결과는 BG_STATUS_UPDATE /
       // BG_SEARCH_STARTED / BG_CANDIDATE_RESULT 로 스트리밍.
@@ -594,6 +651,7 @@ export function useConversation() {
     const restoredStatus = res.status ?? { kind: 'idle' as const };
     const restored: ConversationState = {
       ...emptyState(conversationId),
+      conversationStatus: res.conversationStatus ?? 'active',
       messages: (res.history ?? []).map((m, index) => ({
         id: `m-r-${index}-${Date.now()}`,
         role: m.role,
@@ -602,6 +660,7 @@ export function useConversation() {
         isoTs: m.ts,
       })),
       slots: res.lastFilledSlots ?? null,
+      missingRequired: [],
       applicationState: res.applicationState ?? null,
       automationStatus: restoredStatus,
       proposedCandidate: res.lastProposed ?? null,

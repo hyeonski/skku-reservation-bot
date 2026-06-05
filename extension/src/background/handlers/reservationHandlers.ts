@@ -20,6 +20,7 @@ import {
   resolveSearchSlots,
   summarizeReservationLabel,
   summarizeSpaceLabel,
+  syncDraftHeadcountFromSlots,
 } from '../automationState';
 import { broadcastToSidepanel, makeStatusEmitter } from '../statusBus';
 
@@ -123,11 +124,19 @@ export async function handleStartSearch(
   const ctx = getOrCreateContext(msg.conversationId);
   clearLoginPrompt(msg.conversationId);
   ctx.conversationStatus = 'active';
+  const syncedDraft = syncDraftHeadcountFromSlots(ctx.applicationState?.draft, msg.slots);
+  if (ctx.applicationState && syncedDraft !== ctx.applicationState.draft) {
+    ctx.applicationState = {
+      ...ctx.applicationState,
+      draft: syncedDraft,
+      source: 'user_modified',
+    };
+  }
   const pending: PendingStartRequest = {
     conversationId: msg.conversationId,
     slots: msg.slots,
-    pendingFormData: hasCompleteReservationForm(ctx.applicationState?.draft)
-      ? ctx.applicationState?.draft
+    pendingFormData: hasCompleteReservationForm(syncedDraft)
+      ? syncedDraft
       : undefined,
   };
   pendingStarts.set(msg.conversationId, pending);

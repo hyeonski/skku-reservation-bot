@@ -393,12 +393,21 @@ function formatIsoDate(year: number, month: number, day: number): string | null 
   ).padStart(2, '0')}`;
 }
 
-function parseExplicitDateEdit(text: string, baseDate: string | null | undefined): string | null {
-  if (!baseDate) return null;
-  const base = new Date(`${baseDate}T00:00:00Z`);
-  if (Number.isNaN(base.getTime())) return null;
-  const baseYear = base.getUTCFullYear();
-  const baseMonth = base.getUTCMonth() + 1;
+function parseExplicitDateEdit(
+  text: string,
+  baseDate: string | null | undefined,
+  referenceNow?: string | null,
+): string | null {
+  const base = baseDate ? new Date(`${baseDate}T00:00:00Z`) : null;
+  const reference = referenceNow ? new Date(referenceNow) : new Date();
+  const anchor =
+    base && !Number.isNaN(base.getTime())
+      ? base
+      : !Number.isNaN(reference.getTime())
+        ? reference
+        : new Date();
+  const baseYear = anchor.getUTCFullYear();
+  const baseMonth = anchor.getUTCMonth() + 1;
 
   const monthDay = text.match(/(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
   if (monthDay?.[2] && monthDay[3]) {
@@ -420,8 +429,12 @@ function parseExplicitDateEdit(text: string, baseDate: string | null | undefined
   return null;
 }
 
-function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): FilledSlotsType | null {
-  if (!base || !/(바꾸|변경|수정|아니|다시|찾아|시간(?:은|을|는)|\d+\s*명\s*으로)/.test(text)) {
+function applyInlineSlotEdits(
+  base: FilledSlotsType | null,
+  text: string,
+  referenceNow?: string | null,
+): FilledSlotsType | null {
+  if (!base || !/(바꾸|바꿔|변경|수정|아니|다시|찾아|시간(?:은|을|는)?|\d+\s*명\s*으로)/.test(text)) {
     return null;
   }
 
@@ -430,7 +443,7 @@ function applyInlineSlotEdits(base: FilledSlotsType | null, text: string): Fille
   let explicitSlotValue = false;
   const meridiemContext = getMeridiemContext(base.start_time);
 
-  const explicitDate = parseExplicitDateEdit(text, base.date);
+  const explicitDate = parseExplicitDateEdit(text, base.date, referenceNow);
   if (explicitDate) {
     explicitSlotValue = true;
     if (explicitDate !== next.date) {
@@ -613,7 +626,11 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         }
       }
 
-      const inlineSlotEdits = applyInlineSlotEdits(previousFilledSlots, latestUserMessage);
+      const inlineSlotEdits = applyInlineSlotEdits(
+        previousFilledSlots,
+        latestUserMessage,
+        body.now,
+      );
       if (inlineSlotEdits) {
         llmResult = {
           ...llmResult,

@@ -92,6 +92,7 @@ function derivePhase(s: ConversationState): ChatPhase {
   if (s.submitStep === 'filling' || s.submitStep === 'saving' || s.automationStatus.kind === 'submitting') {
     return 'submitting';
   }
+  if (s.conversationStatus !== 'active') return 'starter';
 
   // 2) automation 상태 분기.
   const auto = s.automationStatus.kind;
@@ -125,6 +126,11 @@ function derivePhase(s: ConversationState): ChatPhase {
 
   // 3) idle / 첫 대화 — slots 누락 분기.
   if (s.messages.length === 0) return 'starter';
+  const missing = new Set(s.missingRequired);
+  if (missing.has('headcount')) return 'slots-count';
+  if (missing.has('end_time') || missing.has('duration_min')) return 'slots-end';
+  if (missing.size > 0) return 'starter';
+
   const slots = s.slots;
   if (slots && slots.headcount == null) return 'slots-count';
   if (slots && !slots.end_time && slots.duration_min == null) return 'slots-end';

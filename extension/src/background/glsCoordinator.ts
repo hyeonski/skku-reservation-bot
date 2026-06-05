@@ -204,6 +204,38 @@ async function sendToTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
   return (await chrome.tabs.sendMessage(tabId, msg)) as TRes;
 }
 
+function getAutomationMessageType(msg: unknown): string {
+  if (!msg || typeof msg !== 'object' || !('type' in msg)) return 'unknown';
+  const type = (msg as { type?: unknown }).type;
+  return typeof type === 'string' ? type : 'unknown';
+}
+
+function automationMessageTimeoutMs(msg: unknown): number {
+  switch (getAutomationMessageType(msg)) {
+    case 'BG_CHECK_AVAILABILITY':
+      return 30000;
+    case 'BG_CLEAR_PREVIEW_FORM':
+    case 'BG_READ_FORM_SNAPSHOT':
+      return 10000;
+    default:
+      return 60000;
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 function isGlsLikeUrl(url?: string): boolean {
   return !!url && (
     url.startsWith(GLS_URL) || url.startsWith('https://login.skku.edu/')
@@ -343,15 +375,25 @@ async function ensureAutomationReady(tabId: number, timeoutMs = 20000): Promise<
 }
 
 async function sendToAutomationTab<TReq, TRes>(tabId: number, msg: TReq): Promise<TRes> {
+  const messageType = getAutomationMessageType(msg);
+  const timeoutMs = automationMessageTimeoutMs(msg);
   try {
-    return await sendToTab<TReq, TRes>(tabId, msg);
+    return await withTimeout(
+      sendToTab<TReq, TRes>(tabId, msg),
+      timeoutMs,
+      `automation message ${messageType}`,
+    );
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     if (!isMissingReceiverError(message)) {
       throw e;
     }
     await ensureAutomationReady(tabId);
-    return sendToTab<TReq, TRes>(tabId, msg);
+    return withTimeout(
+      sendToTab<TReq, TRes>(tabId, msg),
+      timeoutMs,
+      `automation message ${messageType} after bridge recovery`,
+    );
   }
 }
 

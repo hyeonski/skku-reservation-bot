@@ -105,12 +105,21 @@ function formatIsoDate(year: number, month: number, day: number): string | null 
   ).padStart(2, '0')}`;
 }
 
-function parseExplicitDateEdit(text: string, baseDate: string | null | undefined): string | null {
-  if (!baseDate) return null;
-  const base = new Date(`${baseDate}T00:00:00Z`);
-  if (Number.isNaN(base.getTime())) return null;
-  const baseYear = base.getUTCFullYear();
-  const baseMonth = base.getUTCMonth() + 1;
+function parseExplicitDateEdit(
+  text: string,
+  baseDate: string | null | undefined,
+  referenceNow?: string | null,
+): string | null {
+  const base = baseDate ? new Date(`${baseDate}T00:00:00Z`) : null;
+  const reference = referenceNow ? new Date(referenceNow) : new Date();
+  const anchor =
+    base && !Number.isNaN(base.getTime())
+      ? base
+      : !Number.isNaN(reference.getTime())
+        ? reference
+        : new Date();
+  const baseYear = anchor.getUTCFullYear();
+  const baseMonth = anchor.getUTCMonth() + 1;
 
   const monthDay = text.match(/(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
   if (monthDay?.[2] && monthDay[3]) {
@@ -282,10 +291,11 @@ export function applySlotCorrection(
 export function applyInlineSlotEdits(
   base: FilledSlots | null,
   text: string,
+  referenceNow?: string | null,
 ): FilledSlots | null {
   if (!base) return null;
   const normalized = text.trim();
-  if (!/(바꾸|변경|수정|아니|다시|찾아)/.test(normalized)) {
+  if (!/(바꾸|바꿔|변경|수정|아니|다시|찾아|시간(?:은|을|는)?)/.test(normalized)) {
     return null;
   }
 
@@ -294,7 +304,7 @@ export function applyInlineSlotEdits(
   let explicitSlotValue = false;
   const meridiemContext = getMeridiemContext(base.start_time);
 
-  const explicitDate = parseExplicitDateEdit(normalized, base.date);
+  const explicitDate = parseExplicitDateEdit(normalized, base.date, referenceNow);
   if (explicitDate) {
     explicitSlotValue = true;
     if (explicitDate !== next.date) {

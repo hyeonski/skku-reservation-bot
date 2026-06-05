@@ -97,11 +97,7 @@ export function shouldAppearInConversationHistory(seed: SessionActivitySeed): bo
   const hasConfirmedLabel = normalizeWhitespace(seed.confirmedReservationLabel ?? '').length > 0;
   const hasPreview = normalizeWhitespace(seed.lastMessagePreview ?? '').length > 0;
 
-  if (hasMessages || hasSlots || hasApplicationState || hasConfirmedLabel || hasPreview) {
-    return true;
-  }
-
-  return seed.status !== 'active';
+  return hasMessages || hasSlots || hasApplicationState || hasConfirmedLabel || hasPreview;
 }
 
 export function makeConversationSessionSummary(
@@ -126,7 +122,6 @@ export function isPlaceholderConversationSummary(
   summary: ConversationSessionSummary,
 ): boolean {
   return (
-    summary.status === 'active' &&
     summary.title === '새 대화' &&
     normalizeWhitespace(summary.lastMessagePreview).length === 0
   );

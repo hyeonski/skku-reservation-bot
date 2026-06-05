@@ -22,6 +22,7 @@ export interface PopupChatRequest {
   conversationId: string;
   history: ChatMessage[];
   latestMessage: string;
+  clientSlots?: FilledSlots | null;
 }
 
 export interface PopupStartSearch {
@@ -109,6 +110,7 @@ export interface PopupOpenLoginTab {
 export interface BgChatResponse {
   type: 'BG_CHAT_RESPONSE';
   result: ParseResult;
+  status?: AutomationStatus;
 }
 
 export interface BgStatusUpdate {

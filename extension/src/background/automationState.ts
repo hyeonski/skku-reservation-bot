@@ -1,4 +1,4 @@
-import type { ReservationFormData, SpaceCandidate } from '../shared/types';
+import type { FilledSlots, ReservationFormData, SpaceCandidate } from '../shared/types';
 import { deriveEndTime } from '../../../shared/reservation/slotPolicy';
 import * as gls from './glsCoordinator';
 import type { ConversationContext } from './contextStore';
@@ -38,6 +38,18 @@ export function hasCompleteReservationForm(
       formData.purpose.trim() &&
       formData.headcount > 0,
   );
+}
+
+export function syncDraftHeadcountFromSlots(
+  draft: ReservationFormData | null | undefined,
+  slots: FilledSlots | null | undefined,
+): ReservationFormData | null {
+  if (!draft) return null;
+  if (slots?.headcount == null || draft.headcount === slots.headcount) return draft;
+  return {
+    ...draft,
+    headcount: slots.headcount,
+  };
 }
 
 export function summarizeReservationLabel(formData: ReservationFormData): string {

@@ -11,6 +11,7 @@ import {
   isSearchReady,
   normalizeSlotEndTime,
 } from '../../../../shared/reservation/slotPolicy';
+import { HANGSA_CODES } from '@gls/nexacroPaths';
 import * as apiClient from '../apiClient';
 import * as gls from '../glsCoordinator';
 import {
@@ -49,7 +50,10 @@ import {
   mirrorConversation,
   syncConversationSummaryFromContext,
 } from '../conversationPersistence';
-import { syncApplicationDraftToAutomation } from '../automationState';
+import {
+  syncApplicationDraftToAutomation,
+  syncDraftHeadcountFromSlots,
+} from '../automationState';
 
 function parseFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
@@ -99,6 +103,35 @@ function applyEditedFieldConfidence(
   return next;
 }
 
+function resolveHangsaClarificationCode(text: string): string | null {
+  const normalized = text.trim().replace(/\s+/g, ' ');
+  if (!normalized) return null;
+
+  if (/(학생\s*회|총학생회|동아리|동연|동아리\s*연합)/.test(normalized)) {
+    return HANGSA_CODES.교내단체행사_학생회동아리;
+  }
+  if (/(학과|학부|전공|연구실|랩|교수|수업|보충수업|특강|시험)/.test(normalized)) {
+    if (/(보충수업|특강|시험)/.test(normalized)) return HANGSA_CODES.보충수업특강시험;
+    return HANGSA_CODES.학과주관행사;
+  }
+  if (/(세미나|스터디)/.test(normalized)) {
+    return HANGSA_CODES.교내단체행사_세미나스터디;
+  }
+
+  return null;
+}
+
+function canApplyHangsaClarification(
+  draft: ReservationFormData | null,
+  latestMessage: string,
+  currentApplicationState: ReturnType<typeof emptyApplicationState>,
+): string | null {
+  if (!draft) return null;
+  if (!currentApplicationState.missing_application.includes('hangsaGbCode')) return null;
+  if (currentApplicationState.confidence.hangsaGbCode !== 'low') return null;
+  return resolveHangsaClarificationCode(latestMessage);
+}
+
 function hasContextualBareTimeEdit(text: string, previousSlots: ParseResult['filled_slots'] | null): boolean {
   if (!previousSlots?.start_time) return false;
   if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
@@ -127,12 +160,20 @@ async function applyCapacityPreflight(result: ParseResult): Promise<ParseResult>
   };
 }
 
+function isCapacityDeclineResult(result: ParseResult): boolean {
+  return (
+    !result.ready_to_search &&
+    result.filled_slots.headcount != null &&
+    result.assistant_message.includes('수용할 수 있는 공간이 등록되어 있지 않아요')
+  );
+}
+
 export async function handleChatRequest(
   msg: Extract<PopupToBackground, { type: 'POPUP_CHAT_REQUEST' }>,
 ): Promise<BgChatResponse> {
   const ctx = getOrCreateContext(msg.conversationId);
   const previousDraft = ctx.applicationState?.draft ?? null;
-  const previousSlots = ctx.lastFilledSlots;
+  const previousSlots = msg.clientSlots ?? ctx.lastFilledSlots;
   const parsedDraftCommand = parseModification(msg.latestMessage);
   // Trust the popup's history snapshot (clientside authority — D-018).
   ctx.history = msg.history;
@@ -276,6 +317,78 @@ export async function handleChatRequest(
     return { type: 'BG_CHAT_RESPONSE', result };
   }
 
+  const currentApplicationState = ctx.applicationState ?? emptyApplicationState();
+  const hangsaClarificationCode = canApplyHangsaClarification(
+    previousDraft,
+    msg.latestMessage,
+    currentApplicationState,
+  );
+  if (previousDraft && hangsaClarificationCode) {
+    const modified: ReservationFormData = {
+      ...previousDraft,
+      hangsaGbCode: hangsaClarificationCode,
+    };
+    const confidence: Record<ApplicationField, ApplicationConfidenceLevel> = {
+      ...currentApplicationState.confidence,
+      hangsaGbCode: 'high',
+    };
+    const missingApplication = computeMissingApplication(modified, confidence);
+    const applicationState = {
+      ...currentApplicationState,
+      draft: modified,
+      missing_application: missingApplication,
+      needs_application_collection: missingApplication.length > 0,
+      suggested_memory: null,
+      recommendation: null,
+      confidence,
+      source: 'user_modified' as const,
+    };
+    const result: ParseResult = {
+      conversation_id: msg.conversationId,
+      filled_slots: previousSlots ?? emptyFilledSlots(),
+      missing_required: [],
+      intent: 'modify_application',
+      ready_to_search: false,
+      assistant_message: '행사구분을 반영했어요. 아래 카드에서 확인해 주세요.',
+      application_state: applicationState,
+    };
+
+    ctx.conversationStatus = 'active';
+    ctx.confirmedReservationLabel = null;
+    ctx.confirmedSpaceCode = null;
+    ctx.confirmedSpaceLabel = null;
+    ctx.updatedAt = new Date().toISOString();
+    ctx.lastIntent = result.intent;
+    ctx.lastFilledSlots = result.filled_slots;
+    ctx.applicationState = applicationState;
+    syncApplicationDraftToAutomation(ctx, applicationState.draft);
+
+    const assistantMessageTs = new Date().toISOString();
+    const historyWithAssistant: ChatMessage[] = [
+      ...msg.history,
+      { role: 'assistant', content: result.assistant_message, ts: assistantMessageTs },
+    ];
+    ctx.history = historyWithAssistant;
+    void persistContexts();
+    void syncConversationSummaryFromContext(ctx);
+    void mirrorConversation(
+      msg.conversationId,
+      {
+        history: historyWithAssistant,
+        status: ctx.conversationStatus,
+        lastIntent: result.intent,
+        lastFilledSlots: result.filled_slots,
+        lastApplicationState: result.application_state,
+        confirmedReservationLabel: null,
+        confirmedSpaceCode: null,
+        confirmedSpaceLabel: null,
+      },
+      '[SW] hangsaClarification mirror failed:',
+    );
+
+    return { type: 'BG_CHAT_RESPONSE', result };
+  }
+
   if (previousDraft && canApplyDraftOnlyEdit(parsedDraftCommand, msg.latestMessage)) {
     const modified = applyDraftModification(previousDraft, parsedDraftCommand) ?? null;
     if (modified) {
@@ -391,18 +504,21 @@ export async function handleChatRequest(
       ctx.lastProposed,
       slotCorrection.headcount,
     );
+    const slotCorrectionReady = isSearchReady(slotCorrection);
     result = {
       ...result,
       intent: 'modify_slot',
       filled_slots: slotCorrection,
-      ready_to_search: canReuseCurrentCandidate ? false : isSearchReady(slotCorrection),
+      ready_to_search: canReuseCurrentCandidate ? false : slotCorrectionReady,
       missing_required:
-        canReuseCurrentCandidate || isSearchReady(slotCorrection)
+        canReuseCurrentCandidate || slotCorrectionReady
           ? []
           : result.missing_required,
       assistant_message: canReuseCurrentCandidate
         ? `인원을 ${slotCorrection.headcount}명으로 바꿨어요. 현재 추천 공간 정원 범위 안이라 같은 공간으로 이어갈 수 있어요.`
-        : `인원을 ${slotCorrection.headcount}명으로 바꿨어요. 같은 날짜와 시간으로 다시 확인할게요.`,
+        : slotCorrectionReady
+          ? `인원을 ${slotCorrection.headcount}명으로 바꿨어요. 같은 날짜와 시간으로 다시 확인할게요.`
+          : `인원을 ${slotCorrection.headcount}명으로 기록했어요. 날짜와 시간을 알려주세요.`,
       application_state: {
         ...result.application_state,
         draft: applyHeadcountToDraft(
@@ -421,7 +537,11 @@ export async function handleChatRequest(
   if (!slotCorrection) {
     const inlineSlotEditBase =
       previousSlots ?? (result.intent === 'modify_slot' ? result.filled_slots : null);
-    const inlineSlotEdits = applyInlineSlotEdits(inlineSlotEditBase, msg.latestMessage);
+    const inlineSlotEdits = applyInlineSlotEdits(
+      inlineSlotEditBase,
+      msg.latestMessage,
+      requestNow,
+    );
     if (inlineSlotEdits) {
       result = {
         ...result,
@@ -490,8 +610,26 @@ export async function handleChatRequest(
   }
 
   result = applyApplicationLengthGuard(result);
-  result = applyApplicationCollectionPromptGuard(result, msg.latestMessage);
+  const wasReadyBeforeCapacityPreflight = result.ready_to_search;
   result = await applyCapacityPreflight(result);
+  if (!wasReadyBeforeCapacityPreflight || result.ready_to_search) {
+    result = applyApplicationCollectionPromptGuard(result, msg.latestMessage);
+  }
+  const syncedDraft = syncDraftHeadcountFromSlots(
+    result.application_state.draft,
+    result.filled_slots,
+  );
+  if (syncedDraft !== result.application_state.draft) {
+    result = {
+      ...result,
+      application_state: {
+        ...result.application_state,
+        draft: syncedDraft,
+        source: 'user_modified',
+      },
+    };
+  }
+  const capacityDeclined = isCapacityDeclineResult(result);
 
   ctx.conversationStatus = 'active';
   ctx.confirmedReservationLabel = null;
@@ -501,6 +639,11 @@ export async function handleChatRequest(
   ctx.lastIntent = result.intent;
   ctx.lastFilledSlots = result.filled_slots;
   ctx.applicationState = result.application_state;
+  if (capacityDeclined) {
+    ctx.lastStatus = { kind: 'no_candidate', log: [] };
+    ctx.lastProposed = null;
+    ctx.pendingStart = null;
+  }
   syncApplicationDraftToAutomation(ctx, result.application_state.draft);
 
   const assistantMessageTs = new Date().toISOString();
@@ -523,5 +666,9 @@ export async function handleChatRequest(
     '[SW] upsertConversation mirror failed:',
   );
 
-  return { type: 'BG_CHAT_RESPONSE', result };
+  return {
+    type: 'BG_CHAT_RESPONSE',
+    result,
+    ...(capacityDeclined ? { status: ctx.lastStatus } : {}),
+  };
 }
