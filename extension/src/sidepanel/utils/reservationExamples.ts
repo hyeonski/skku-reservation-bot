@@ -18,6 +18,6 @@ export function getReservationExamples(now = new Date()): string[] {
   return [
     `${meetingDate} 오후 6시부터 2시간 20명 학생회 회의`,
     `${practiceDate} 14시부터 2시간 동아리 연습`,
-    `${eventDate} 오후 3시부터 2시간 50명 기능 검증 행사`,
+    `${eventDate} 오후 3시부터 2시간 50명 학술 세미나`,
   ];
 }

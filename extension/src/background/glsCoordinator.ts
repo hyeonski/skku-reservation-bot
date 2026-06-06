@@ -440,7 +440,7 @@ function normalizeSearchSpaceFilter(space: string | null): string | undefined {
   if (/^(회의실|강의실|공간|방|장소)$/.test(compact)) return undefined;
 
   const meaningful = compact.replace(
-    /(E2E|테스트|기능검증|회의실|공간|방|예약|대여|잡아줘|잡아주세요|찾아줘|찾아주세요|예약해줘|예약해주세요|빌려줘|빌려주세요)/g,
+    /(회의실|공간|방|예약|대여|잡아줘|잡아주세요|찾아줘|찾아주세요|예약해줘|예약해주세요|빌려줘|빌려주세요)/g,
     '',
   );
   if (!meaningful) return undefined;

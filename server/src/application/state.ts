@@ -218,7 +218,7 @@ function extractInlineApplicationDescription(text: string): string | null {
   const cleaned = stripScheduleAndReservationWords(text).replace(/\s*목적으로$/g, '');
   if (cleaned.length < 3) return null;
   if (
-    !/(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터|E2E|테스트|검증)/i.test(
+    !/(학생회|동아리|세미나|스터디|회의|운영회의|정기회의|간담회|위원회|학과|학부|전공|연구실|랩|행사|특강|시험|총학생회|본부|센터)/i.test(
       cleaned,
     )
   ) {

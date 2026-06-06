@@ -16,13 +16,13 @@ const emptySlots: FilledSlots = {
 
 const memory = {
   conversationId: '11111111-1111-4111-8111-111111111111',
-  label: 'Codex E2E 기능 검증 회의',
+  label: '소프트웨어학과 학생회 운영진 정기회의',
   formData: {
     hangsaGbCode: '113',
-    organization: 'Codex E2E',
-    eventName: '기능 검증 회의',
+    organization: '소프트웨어학과 학생회',
+    eventName: '운영진 정기회의',
     headcount: 20,
-    purpose: '기능 검증 회의 진행',
+    purpose: '운영진 정기회의 진행',
   },
 };
 
@@ -40,7 +40,7 @@ const reuseHit = buildApplicationState({
 assert.equal(reuseHit.applicationState.draft, null);
 assert.equal(reuseHit.applicationState.suggested_memory?.conversationId, memory.conversationId);
 assert.match(reuseHit.assistantMessage, /지난번|같은 정보/);
-assert.equal(reuseHit.applicationState.recommendation?.event, '기능 검증 회의');
+assert.equal(reuseHit.applicationState.recommendation?.event, '운영진 정기회의');
 
 const reuseMiss = buildApplicationState({
   history: [{ role: 'user', content: '저번처럼 해줘' }],
@@ -58,8 +58,8 @@ assert.equal(reuseMiss.applicationState.suggested_memory, null);
 assert.match(reuseMiss.assistantMessage, /지난 신청 정보를 찾지 못했어요/);
 
 const description = buildApplicationState({
-  history: [{ role: 'user', content: '기능 검증 회의' }],
-  latestUserMessage: '기능 검증 회의',
+  history: [{ role: 'user', content: '운영진 정기회의' }],
+  latestUserMessage: '운영진 정기회의',
   baseIntent: 'modify_application',
   baseAssistantMessage: '신청서에는 어떤 단체의 어떤 행사로 넣을까요?',
   filledSlots: { ...emptySlots, headcount: 20 },
@@ -68,5 +68,5 @@ const description = buildApplicationState({
   memories: [],
 });
 
-assert.equal(description.applicationState.draft?.eventName, '기능 검증 회의');
+assert.equal(description.applicationState.draft?.eventName, '운영진 정기회의');
 assert.equal(description.applicationState.draft?.headcount, 20);
