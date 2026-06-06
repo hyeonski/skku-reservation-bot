@@ -43,6 +43,13 @@ import {
   usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy.js';
 import { applyInlineSlotEdits } from '../../../shared/reservation/slotEdits.js';
+import {
+  MAX_RESERVATION_DURATION_MIN,
+  SLOT_GUARD_MESSAGES,
+  getSlotDurationMinutes,
+  hasContextualBareTimeEdit,
+  overDurationMessage,
+} from '../../../shared/reservation/slotGuards.js';
 
 const ErrorResponse = z.object({
   error: z.string(),
@@ -212,20 +219,12 @@ function isPastSlot(slots: FilledSlotsType, now: string): boolean {
 
 function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMParseResult {
   if (!isPastSlot(result.filled_slots, now)) return result;
-  return makeInvalidInputResult(
-    '지난 날짜나 이미 지난 시간으로는 예약할 수 없어요. 오늘 이후의 날짜와 시간을 다시 알려주세요.',
-    ['date'],
-    'out_of_scope',
-  );
+  return makeInvalidInputResult(SLOT_GUARD_MESSAGES.past_slot, ['date'], 'out_of_scope');
 }
 
 function applyFutureBookingWindowOverride(result: LLMParseResult, now: string): LLMParseResult {
   if (!isBeyondFutureBookingWindow(result.filled_slots, now)) return result;
-  return makeInvalidInputResult(
-    '너무 먼 날짜는 아직 GLS에서 신청 가능 여부를 안정적으로 확인하기 어려워요. 가까운 날짜로 다시 알려주세요.',
-    ['date'],
-    'out_of_scope',
-  );
+  return makeInvalidInputResult(SLOT_GUARD_MESSAGES.beyond_window, ['date'], 'out_of_scope');
 }
 
 function applyStudentCouncilBuildingDisambiguation(
@@ -319,8 +318,7 @@ function applySameDayTimeOverride(result: LLMParseResult): LLMParseResult {
     filled_slots: clearTimeSlots(result.filled_slots),
     missing_required: ['start_time', 'end_time'],
     ready_to_search: false,
-    assistant_message:
-      '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.crosses_midnight,
   };
 }
 
@@ -331,8 +329,7 @@ function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {
     filled_slots: clearTimeSlots(result.filled_slots),
     missing_required: ['start_time', 'end_time'],
     ready_to_search: false,
-    assistant_message:
-      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.unsupported_minute,
   };
 }
 
@@ -356,8 +353,7 @@ function applyGeneralReservationHoursOverride(result: LLMParseResult): LLMParseR
     filled_slots: clearTimeSlots(result.filled_slots),
     missing_required: ['start_time', 'end_time'],
     ready_to_search: false,
-    assistant_message:
-      '새벽이나 심야 시간대는 일반 GLS 공간예약 가능 시간 밖으로 보여요. 예: 09:00부터 22:00 사이처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.outside_hours,
   };
 }
 
@@ -371,8 +367,20 @@ function applyAmbiguousMeridiemSlotOverride(
     filled_slots: clearTimeSlots(result.filled_slots),
     missing_required: Array.from(new Set([...result.missing_required, 'start_time'])),
     ready_to_search: false,
-    assistant_message:
-      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.ambiguous_meridiem,
+  };
+}
+
+function applyDurationLimitOverride(result: LLMParseResult): LLMParseResult {
+  const durationMin = getSlotDurationMinutes(result.filled_slots);
+  if (durationMin == null || durationMin <= MAX_RESERVATION_DURATION_MIN) return result;
+  const hours = Math.round((durationMin / 60) * 10) / 10;
+  return {
+    ...result,
+    intent: 'out_of_scope',
+    ready_to_search: false,
+    missing_required: [],
+    assistant_message: overDurationMessage(hours),
   };
 }
 
@@ -390,35 +398,18 @@ function makeImpossibleInputResult(text: string, now: string): LLMParseResult | 
     );
   }
   if (hasUnsupportedMinuteUnit(text)) {
-    return makeInvalidInputResult(
-      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
-      ['start_time', 'end_time'],
-    );
+    return makeInvalidInputResult(SLOT_GUARD_MESSAGES.unsupported_minute, [
+      'start_time',
+      'end_time',
+    ]);
   }
   if (hasAmbiguousBareMeridiemTime(text)) {
-    return makeInvalidInputResult(
-      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
-      ['start_time'],
-    );
+    return makeInvalidInputResult(SLOT_GUARD_MESSAGES.ambiguous_meridiem, ['start_time']);
   }
   if (isPastTodayRequest(text, now)) {
-    return makeInvalidInputResult(
-      '지난 날짜나 이미 지난 시간으로는 예약할 수 없어요. 오늘 이후의 날짜와 시간을 다시 알려주세요.',
-      ['date'],
-      'out_of_scope',
-    );
+    return makeInvalidInputResult(SLOT_GUARD_MESSAGES.past_slot, ['date'], 'out_of_scope');
   }
   return null;
-}
-
-function hasContextualBareTimeEdit(
-  text: string,
-  previousSlots: FilledSlotsType | null,
-): boolean {
-  if (!previousSlots?.start_time) return false;
-  if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
-  if (/오전|오후|새벽|심야|밤/.test(text)) return false;
-  return /\d{1,2}\s*시(?!간)/.test(text);
 }
 
 export const __parseRouteTestables = {
@@ -433,6 +424,7 @@ export const __parseRouteTestables = {
   applyStudentCenterCampusClarification,
   applyStudentCouncilBuildingDisambiguation,
   applyTimeGranularityOverride,
+  applyDurationLimitOverride,
   applyExplicitHeadcountOverride,
   extractExplicitHeadcount,
   hasAmbiguousBareMeridiemTime,
@@ -517,6 +509,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           llmResult = applySameDayTimeOverride(llmResult);
           llmResult = applyTimeGranularityOverride(llmResult);
           llmResult = applyGeneralReservationHoursOverride(llmResult);
+          llmResult = applyDurationLimitOverride(llmResult);
           llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
         } catch (err) {
           request.log.error({ err }, 'parseWithLLM failed');
@@ -547,6 +540,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         llmResult = applySameDayTimeOverride(llmResult);
         llmResult = applyTimeGranularityOverride(llmResult);
         llmResult = applyGeneralReservationHoursOverride(llmResult);
+        llmResult = applyDurationLimitOverride(llmResult);
         llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
       }
       if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {

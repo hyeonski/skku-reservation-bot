@@ -37,6 +37,7 @@ import {
   preservePreviousSlotContext,
 } from '../chatSlotCorrections';
 import { applyInlineSlotEdits } from '../../../../shared/reservation/slotEdits';
+import { hasContextualBareTimeEdit } from '../../../../shared/reservation/slotGuards';
 import {
   applyAmbiguousMeridiemOverride,
   applyContextualMeridiemRangeOverride,
@@ -135,13 +136,6 @@ function canApplyHangsaClarification(
   if (!currentApplicationState.missing_application.includes('hangsaGbCode')) return null;
   if (currentApplicationState.confidence.hangsaGbCode !== 'low') return null;
   return resolveHangsaClarificationCode(latestMessage);
-}
-
-function hasContextualBareTimeEdit(text: string, previousSlots: ParseResult['filled_slots'] | null): boolean {
-  if (!previousSlots?.start_time) return false;
-  if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
-  if (/오전|오후|새벽|심야|밤/.test(text)) return false;
-  return /\d{1,2}\s*시(?!간)/.test(text);
 }
 
 async function applyCapacityPreflight(result: ParseResult): Promise<ParseResult> {

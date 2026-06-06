@@ -1,4 +1,4 @@
-import type { ApplicationState, FilledSlots, ParseResult } from '../shared/types';
+import type { ApplicationState, ParseResult } from '../shared/types';
 import {
   applyContextualMeridiemRange,
   clearTimeSlots,
@@ -7,11 +7,14 @@ import {
   hasAmbiguousBareMeridiemTime,
   isBeyondFutureBookingWindow,
   isLikelyOutsideGeneralReservationHours,
-  timeToMinutes,
   usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy';
-
-const MAX_RESERVATION_DURATION_MIN = 8 * 60;
+import {
+  MAX_RESERVATION_DURATION_MIN,
+  SLOT_GUARD_MESSAGES,
+  getSlotDurationMinutes,
+  overDurationMessage,
+} from '../../../shared/reservation/slotGuards';
 
 export function applySameDayTimeOverride(
   result: ParseResult,
@@ -24,8 +27,7 @@ export function applySameDayTimeOverride(
     ready_to_search: false,
     missing_required: ['start_time', 'end_time'],
     filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message:
-      '자정을 넘기는 예약은 지원하지 않아요. 같은 날짜 안에서 시작·종료 시간이 끝나도록 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.crosses_midnight,
     application_state: previousApplicationState ?? result.application_state,
   };
 }
@@ -41,8 +43,7 @@ export function applyTimeGranularityOverride(
     ready_to_search: false,
     missing_required: ['start_time', 'end_time'],
     filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message:
-      'GLS 공간예약은 30분 단위 시간만 안정적으로 처리할 수 있어요. 예: 18:00 또는 18:30처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.unsupported_minute,
     application_state: previousApplicationState ?? result.application_state,
   };
 }
@@ -59,8 +60,7 @@ export function applyAmbiguousMeridiemOverride(
     ready_to_search: false,
     missing_required: Array.from(new Set([...result.missing_required, 'start_time'])),
     filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message:
-      '오전/오후가 빠진 시간은 헷갈릴 수 있어요. 예: 오전 6시 또는 오후 6시처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.ambiguous_meridiem,
     application_state: previousApplicationState ?? result.application_state,
   };
 }
@@ -89,20 +89,9 @@ export function applyGeneralReservationHoursOverride(
     ready_to_search: false,
     missing_required: ['start_time', 'end_time'],
     filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message:
-      '새벽이나 심야 시간대는 일반 GLS 공간예약 가능 시간 밖으로 보여요. 예: 09:00부터 22:00 사이처럼 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.outside_hours,
     application_state: previousApplicationState ?? result.application_state,
   };
-}
-
-function getSlotDurationMinutes(slots: FilledSlots | null | undefined): number | null {
-  if (!slots) return null;
-  if (slots.duration_min != null) return slots.duration_min;
-  const startMin = timeToMinutes(slots.start_time);
-  const endMin = timeToMinutes(slots.end_time);
-  if (startMin == null || endMin == null) return null;
-  const delta = endMin >= startMin ? endMin - startMin : endMin + 24 * 60 - startMin;
-  return delta > 0 ? delta : null;
 }
 
 export function applyDurationLimitOverride(
@@ -117,7 +106,7 @@ export function applyDurationLimitOverride(
     intent: 'out_of_scope',
     ready_to_search: false,
     missing_required: [],
-    assistant_message: `한 번에 ${hours}시간 예약은 제한을 넘을 수 있어요. 안전하게 진행하려면 최대 8시간 이내로 나누거나 시간을 줄여서 요청해 주세요.`,
+    assistant_message: overDurationMessage(hours),
     application_state: previousApplicationState ?? result.application_state,
   };
 }
@@ -134,8 +123,7 @@ export function applyFutureBookingWindowOverride(
     ready_to_search: false,
     missing_required: ['date'],
     filled_slots: emptyFilledSlots(),
-    assistant_message:
-      '너무 먼 날짜는 아직 GLS에서 신청 가능 여부를 안정적으로 확인하기 어려워요. 가까운 날짜로 다시 알려주세요.',
+    assistant_message: SLOT_GUARD_MESSAGES.beyond_window,
     application_state: previousApplicationState ?? result.application_state,
   };
 }
