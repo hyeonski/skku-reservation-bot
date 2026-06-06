@@ -150,6 +150,11 @@ export function extractLatestHeadcountRangeUpper(
   return null;
 }
 
+/**
+ * LLM 보정 가드(클라 전용): "20~30명" 같은 범위 입력에서 LLM 이 하한/중간값을
+ * 고르는 경우가 있어, 안전하게 상한(정원 충족 보장)으로 맞춘다. 서버 /parse 에는
+ * 범위 처리가 없어 클라에서 보정한다.
+ */
 export function applyHeadcountRangeOverride(
   result: ParseResult,
   upper: number | null,

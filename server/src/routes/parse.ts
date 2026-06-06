@@ -41,9 +41,12 @@ import {
 import { applyInlineSlotEdits } from '../../../shared/reservation/slotEdits.js';
 import {
   SLOT_GUARD_MESSAGES,
+  STUDENT_CENTER_CAMPUS_MESSAGE,
   type SlotStateGuardReason,
   evaluateSlotStateGuards,
   hasContextualBareTimeEdit,
+  hasExplicitStudentCenterCampus,
+  mentionsStudentCenter,
 } from '../../../shared/reservation/slotGuards.js';
 
 const ErrorResponse = z.object({
@@ -153,6 +156,10 @@ function extractExplicitHeadcount(text: string): number | null {
   return latest;
 }
 
+/**
+ * LLM 보정 가드: 사용자가 "N명"을 명시했는데 LLM 이 headcount 를 다르게/누락해
+ * 채우는 경우가 있어, 원문에서 마지막 "N명"을 다시 추출해 덮어쓴다.
+ */
 function applyExplicitHeadcountOverride(
   result: LLMParseResult,
   text: string,
@@ -235,13 +242,18 @@ function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResu
   };
 }
 
+/**
+ * LLM 보정 가드: LLM 이 "학생회"(단체)를 건물 "학생회관"으로 과추론하는 경우가
+ * 있어, 사용자가 "학생회관"이라 말하지 않았다면 building 을 비운다.
+ * 근본 해결은 프롬프트 보강이지만 LLM eval 전까지의 안전망.
+ */
 function applyStudentCouncilBuildingDisambiguation(
   result: LLMParseResult,
   text: string,
 ): LLMParseResult {
   const building = result.filled_slots.building?.trim();
   if (building !== '학생회관') return result;
-  if (/학생\s*회관/.test(text)) return result;
+  if (mentionsStudentCenter(text)) return result;
   if (!/학생\s*회/.test(text)) return result;
 
   return {
@@ -253,18 +265,16 @@ function applyStudentCouncilBuildingDisambiguation(
   };
 }
 
-function hasExplicitStudentCenterCampus(text: string): boolean {
-  return /(율전|자과캠|자연과학캠퍼스|자연과학\s*캠퍼스|명륜|인사캠|인문사회과학캠퍼스|인문사회\s*캠퍼스)/.test(
-    text,
-  );
-}
-
+/**
+ * LLM 보정 가드: "학생회관"은 캠퍼스마다 존재해 LLM 이 캠퍼스를 임의 추정하기
+ * 쉽다. 캠퍼스 명시가 없으면 campus 를 비우고 되묻는다. (탐지·문구는 shared.)
+ */
 function applyStudentCenterCampusClarification(
   result: LLMParseResult,
   text: string,
 ): LLMParseResult {
   const building = result.filled_slots.building?.trim();
-  if (!/학생\s*회관/.test(text)) return result;
+  if (!mentionsStudentCenter(text)) return result;
   if (hasExplicitStudentCenterCampus(text)) return result;
 
   return {
@@ -276,8 +286,7 @@ function applyStudentCenterCampusClarification(
     },
     missing_required: Array.from(new Set([...result.missing_required, 'campus'])),
     ready_to_search: false,
-    assistant_message:
-      '학생회관은 캠퍼스가 헷갈릴 수 있어요. 명륜 학생회관인지, 율전/자과캠 학생회관인지 알려주세요.',
+    assistant_message: STUDENT_CENTER_CAMPUS_MESSAGE,
   };
 }
 
@@ -290,6 +299,11 @@ function extractExplicitSpaceCode(text: string): string | null {
   return null;
 }
 
+/**
+ * LLM 보정 가드: 사용자가 5~6자리 공간코드를 직접 적으면 DB 에서 조회해
+ * campus/building/space 를 확정한다. LLM 은 코드를 신뢰성 있게 매핑하지 못한다.
+ * (코드가 DB 에 없으면 조용히 무시 — 오타/미시딩 시 일반 흐름으로 진행.)
+ */
 async function applyExplicitSpaceCodeOverride(
   app: FastifyInstance,
   result: LLMParseResult,

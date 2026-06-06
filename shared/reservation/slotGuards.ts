@@ -68,6 +68,27 @@ export function hasContextualBareTimeEdit(
   return /\d{1,2}\s*시(?!간)/.test(text);
 }
 
+// ----- 위치(캠퍼스) 입력 명확화 가드 -----
+// LLM 이 "학생회관"만 보고 캠퍼스를 임의로 추정하는 경우가 있어, 캠퍼스 명시가
+// 없으면 되묻도록 강제한다. 탐지 규칙·문구는 서버/클라가 공유하고, 슬롯 정리
+// 방식(building 유지 여부 등)만 각 측 호출부에 남긴다.
+
+export const STUDENT_CENTER_CAMPUS_MESSAGE =
+  '학생회관은 캠퍼스가 헷갈릴 수 있어요. 명륜 학생회관인지, 율전/자과캠 학생회관인지 알려주세요.';
+
+const STUDENT_CENTER_CAMPUS_PATTERN =
+  /(율전|자과캠|자연과학캠퍼스|자연과학\s*캠퍼스|명륜|인사캠|인문사회과학캠퍼스|인문사회\s*캠퍼스)/;
+
+/** 메시지에 캠퍼스가 명시돼 있는지(학생회관 명확화 억제 조건). */
+export function hasExplicitStudentCenterCampus(text: string): boolean {
+  return STUDENT_CENTER_CAMPUS_PATTERN.test(text);
+}
+
+/** "학생회관" 언급 여부. */
+export function mentionsStudentCenter(text: string): boolean {
+  return /학생\s*회관/.test(text);
+}
+
 export type SlotStateGuardReason =
   | 'beyond_window'
   | 'crosses_midnight'

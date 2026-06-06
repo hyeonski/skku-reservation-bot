@@ -37,7 +37,12 @@ import {
   preservePreviousSlotContext,
 } from '../chatSlotCorrections';
 import { applyInlineSlotEdits } from '../../../../shared/reservation/slotEdits';
-import { hasContextualBareTimeEdit } from '../../../../shared/reservation/slotGuards';
+import {
+  STUDENT_CENTER_CAMPUS_MESSAGE,
+  hasContextualBareTimeEdit,
+  hasExplicitStudentCenterCampus,
+  mentionsStudentCenter,
+} from '../../../../shared/reservation/slotGuards';
 import {
   applyAmbiguousMeridiemOverride,
   applyContextualMeridiemRangeOverride,
@@ -180,14 +185,13 @@ function broadenLocationScope(slots: FilledSlots): FilledSlots {
   };
 }
 
-function hasExplicitStudentCenterCampus(text: string): boolean {
-  return /(율전|자과캠|자연과학캠퍼스|자연과학\s*캠퍼스|명륜|인사캠|인문사회과학캠퍼스|인문사회\s*캠퍼스)/.test(
-    text,
-  );
-}
-
+/**
+ * LLM 보정 가드(서버 applyStudentCenterCampusClarification 의 클라 짝).
+ * "학생회관"은 캠퍼스마다 있어 캠퍼스 명시가 없으면 되묻는다. 탐지·문구는 shared.
+ * (서버는 building 을 유지, 클라는 비운다 — 사소한 차이지만 동작 보존 위해 유지.)
+ */
 function applyStudentCenterCampusGuard(result: ParseResult, latestMessage: string): ParseResult {
-  if (!/학생\s*회관/.test(latestMessage)) return result;
+  if (!mentionsStudentCenter(latestMessage)) return result;
   if (hasExplicitStudentCenterCampus(latestMessage)) return result;
 
   return {
@@ -199,8 +203,7 @@ function applyStudentCenterCampusGuard(result: ParseResult, latestMessage: strin
     },
     missing_required: Array.from(new Set([...result.missing_required, 'campus'])),
     ready_to_search: false,
-    assistant_message:
-      '학생회관은 캠퍼스가 헷갈릴 수 있어요. 명륜 학생회관인지, 율전/자과캠 학생회관인지 알려주세요.',
+    assistant_message: STUDENT_CENTER_CAMPUS_MESSAGE,
     application_state: {
       ...result.application_state,
       recommendation: null,
