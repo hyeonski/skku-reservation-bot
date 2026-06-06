@@ -48,7 +48,7 @@ export function isSearchReady(slots: ReservationSlots | null | undefined): boole
   );
 }
 
-function timeToMinutes(time: string | null): number | null {
+export function timeToMinutes(time: string | null): number | null {
   if (!time) return null;
   const match = time.match(/^(\d{2}):(\d{2})$/);
   if (!match?.[1] || !match[2]) return null;
@@ -58,7 +58,7 @@ function timeToMinutes(time: string | null): number | null {
   return hour * 60 + minute;
 }
 
-function minutesToTime(minutes: number): string {
+export function minutesToTime(minutes: number): string {
   const normalized = ((minutes % (24 * 60)) + 24 * 60) % (24 * 60);
   return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(
     normalized % 60,

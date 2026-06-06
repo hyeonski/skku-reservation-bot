@@ -30,13 +30,13 @@ import {
 import {
   applyHeadcountRangeOverride,
   applyHeadcountToDraft,
-  applyInlineSlotEdits,
   applyRetrySlotAdjustment,
   applySlotCorrection,
   candidateSupportsHeadcount,
   extractLatestHeadcountRangeUpper,
   preservePreviousSlotContext,
 } from '../chatSlotCorrections';
+import { applyInlineSlotEdits } from '../../../../shared/reservation/slotEdits';
 import {
   applyAmbiguousMeridiemOverride,
   applyContextualMeridiemRangeOverride,

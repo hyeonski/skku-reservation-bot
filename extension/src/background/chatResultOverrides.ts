@@ -7,9 +7,9 @@ import {
   hasAmbiguousBareMeridiemTime,
   isBeyondFutureBookingWindow,
   isLikelyOutsideGeneralReservationHours,
+  timeToMinutes,
   usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy';
-import { timeToMinutes } from './chatSlotCorrections';
 
 const MAX_RESERVATION_DURATION_MIN = 8 * 60;
 
