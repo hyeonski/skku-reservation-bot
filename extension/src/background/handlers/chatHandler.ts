@@ -41,11 +41,7 @@ import { hasContextualBareTimeEdit } from '../../../../shared/reservation/slotGu
 import {
   applyAmbiguousMeridiemOverride,
   applyContextualMeridiemRangeOverride,
-  applyDurationLimitOverride,
-  applyFutureBookingWindowOverride,
-  applyGeneralReservationHoursOverride,
-  applySameDayTimeOverride,
-  applyTimeGranularityOverride,
+  applySlotStateGuards,
 } from '../chatResultOverrides';
 import { getOrCreateContext, pendingStarts, persistContexts } from '../contextStore';
 import {
@@ -676,11 +672,7 @@ export async function handleChatRequest(
     ...result,
     filled_slots: normalizeSlotEndTime(result.filled_slots),
   };
-  result = applyFutureBookingWindowOverride(result, requestNow, ctx.applicationState);
-  result = applySameDayTimeOverride(result, ctx.applicationState);
-  result = applyTimeGranularityOverride(result, ctx.applicationState);
-  result = applyGeneralReservationHoursOverride(result, ctx.applicationState);
-  result = applyDurationLimitOverride(result, ctx.applicationState);
+  result = applySlotStateGuards(result, requestNow, ctx.applicationState);
 
   if (
     previousDraft &&

@@ -2,51 +2,13 @@ import type { ApplicationState, ParseResult } from '../shared/types';
 import {
   applyContextualMeridiemRange,
   clearTimeSlots,
-  crossesMidnight,
-  emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
-  isBeyondFutureBookingWindow,
-  isLikelyOutsideGeneralReservationHours,
-  usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy';
 import {
-  MAX_RESERVATION_DURATION_MIN,
   SLOT_GUARD_MESSAGES,
-  getSlotDurationMinutes,
-  overDurationMessage,
+  type SlotStateGuardReason,
+  evaluateSlotStateGuards,
 } from '../../../shared/reservation/slotGuards';
-
-export function applySameDayTimeOverride(
-  result: ParseResult,
-  previousApplicationState: ApplicationState | null,
-): ParseResult {
-  if (!crossesMidnight(result.filled_slots)) return result;
-  return {
-    ...result,
-    intent: 'new_reservation',
-    ready_to_search: false,
-    missing_required: ['start_time', 'end_time'],
-    filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message: SLOT_GUARD_MESSAGES.crosses_midnight,
-    application_state: previousApplicationState ?? result.application_state,
-  };
-}
-
-export function applyTimeGranularityOverride(
-  result: ParseResult,
-  previousApplicationState: ApplicationState | null,
-): ParseResult {
-  if (!usesUnsupportedReservationMinute(result.filled_slots)) return result;
-  return {
-    ...result,
-    intent: 'new_reservation',
-    ready_to_search: false,
-    missing_required: ['start_time', 'end_time'],
-    filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message: SLOT_GUARD_MESSAGES.unsupported_minute,
-    application_state: previousApplicationState ?? result.application_state,
-  };
-}
 
 export function applyAmbiguousMeridiemOverride(
   result: ParseResult,
@@ -78,52 +40,26 @@ export function applyContextualMeridiemRangeOverride(
       };
 }
 
-export function applyGeneralReservationHoursOverride(
-  result: ParseResult,
-  previousApplicationState: ApplicationState | null,
-): ParseResult {
-  if (!isLikelyOutsideGeneralReservationHours(result.filled_slots)) return result;
-  return {
-    ...result,
-    intent: 'new_reservation',
-    ready_to_search: false,
-    missing_required: ['start_time', 'end_time'],
-    filled_slots: clearTimeSlots(result.filled_slots),
-    assistant_message: SLOT_GUARD_MESSAGES.outside_hours,
-    application_state: previousApplicationState ?? result.application_state,
-  };
-}
+/**
+ * 슬롯 상태 가드(미래창/자정/30분/시간대/길이)를 공유 평가기로 1회 적용.
+ * intent 매핑은 클라 동작 유지: over_duration 만 out_of_scope, 나머지는 new_reservation.
+ */
+const GUARD_FORCES_OUT_OF_SCOPE = new Set<SlotStateGuardReason>(['over_duration']);
 
-export function applyDurationLimitOverride(
-  result: ParseResult,
-  previousApplicationState: ApplicationState | null,
-): ParseResult {
-  const durationMin = getSlotDurationMinutes(result.filled_slots);
-  if (durationMin == null || durationMin <= MAX_RESERVATION_DURATION_MIN) return result;
-  const hours = Math.round((durationMin / 60) * 10) / 10;
-  return {
-    ...result,
-    intent: 'out_of_scope',
-    ready_to_search: false,
-    missing_required: [],
-    assistant_message: overDurationMessage(hours),
-    application_state: previousApplicationState ?? result.application_state,
-  };
-}
-
-export function applyFutureBookingWindowOverride(
+export function applySlotStateGuards(
   result: ParseResult,
   now: string,
   previousApplicationState: ApplicationState | null,
 ): ParseResult {
-  if (!isBeyondFutureBookingWindow(result.filled_slots, now)) return result;
+  const outcome = evaluateSlotStateGuards(result.filled_slots, now);
+  if (!outcome) return result;
   return {
     ...result,
-    intent: 'new_reservation',
+    intent: GUARD_FORCES_OUT_OF_SCOPE.has(outcome.reason) ? 'out_of_scope' : 'new_reservation',
     ready_to_search: false,
-    missing_required: ['date'],
-    filled_slots: emptyFilledSlots(),
-    assistant_message: SLOT_GUARD_MESSAGES.beyond_window,
+    missing_required: outcome.missingRequired,
+    filled_slots: outcome.filledSlots,
+    assistant_message: outcome.message,
     application_state: previousApplicationState ?? result.application_state,
   };
 }

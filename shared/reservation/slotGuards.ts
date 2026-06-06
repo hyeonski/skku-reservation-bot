@@ -7,7 +7,16 @@
  * 는 서버/클라가 의미가 달라 각 측 어댑터에 남겨 둔다.)
  */
 
-import { type ReservationSlots, timeToMinutes } from './slotPolicy';
+import {
+  type ReservationSlots,
+  clearTimeSlots,
+  crossesMidnight,
+  emptyFilledSlots,
+  isBeyondFutureBookingWindow,
+  isLikelyOutsideGeneralReservationHours,
+  timeToMinutes,
+  usesUnsupportedReservationMinute,
+} from './slotPolicy';
 
 /** 한 번에 예약 가능한 최대 길이(분). 초과 시 분할 안내. */
 export const MAX_RESERVATION_DURATION_MIN = 8 * 60;
@@ -57,4 +66,73 @@ export function hasContextualBareTimeEdit(
   if (!/(바꾸|변경|수정|아니|시간(?:은|을|는)?)/.test(text)) return false;
   if (/오전|오후|새벽|심야|밤/.test(text)) return false;
   return /\d{1,2}\s*시(?!간)/.test(text);
+}
+
+export type SlotStateGuardReason =
+  | 'beyond_window'
+  | 'crosses_midnight'
+  | 'unsupported_minute'
+  | 'outside_hours'
+  | 'over_duration';
+
+export interface SlotGuardOutcome<T extends ReservationSlots> {
+  reason: SlotStateGuardReason;
+  message: string;
+  /** 가드 적용 후 슬롯. 시간 가드는 시간만, beyond_window 는 전체 초기화, over_duration 은 유지. */
+  filledSlots: T;
+  missingRequired: string[];
+}
+
+/**
+ * 슬롯 상태 기반 가드를 고정 우선순위로 1회 평가한다(첫 위반만 반환).
+ * intent 매핑(서버 out_of_scope ↔ 클라 new_reservation)은 다운스트림 의미가
+ * 달라 각 측 어댑터에 남긴다 — 여기서는 reason·문구·슬롯·missing 만 정한다.
+ */
+export function evaluateSlotStateGuards<T extends ReservationSlots>(
+  slots: T,
+  now: string,
+): SlotGuardOutcome<T> | null {
+  if (isBeyondFutureBookingWindow(slots, now)) {
+    return {
+      reason: 'beyond_window',
+      message: SLOT_GUARD_MESSAGES.beyond_window,
+      filledSlots: emptyFilledSlots<T>(),
+      missingRequired: ['date'],
+    };
+  }
+  if (crossesMidnight(slots)) {
+    return {
+      reason: 'crosses_midnight',
+      message: SLOT_GUARD_MESSAGES.crosses_midnight,
+      filledSlots: clearTimeSlots(slots),
+      missingRequired: ['start_time', 'end_time'],
+    };
+  }
+  if (usesUnsupportedReservationMinute(slots)) {
+    return {
+      reason: 'unsupported_minute',
+      message: SLOT_GUARD_MESSAGES.unsupported_minute,
+      filledSlots: clearTimeSlots(slots),
+      missingRequired: ['start_time', 'end_time'],
+    };
+  }
+  if (isLikelyOutsideGeneralReservationHours(slots)) {
+    return {
+      reason: 'outside_hours',
+      message: SLOT_GUARD_MESSAGES.outside_hours,
+      filledSlots: clearTimeSlots(slots),
+      missingRequired: ['start_time', 'end_time'],
+    };
+  }
+  const durationMin = getSlotDurationMinutes(slots);
+  if (durationMin != null && durationMin > MAX_RESERVATION_DURATION_MIN) {
+    const hours = Math.round((durationMin / 60) * 10) / 10;
+    return {
+      reason: 'over_duration',
+      message: overDurationMessage(hours),
+      filledSlots: slots,
+      missingRequired: [],
+    };
+  }
+  return null;
 }

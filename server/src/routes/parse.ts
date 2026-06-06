@@ -33,22 +33,17 @@ import {
 import {
   applyContextualMeridiemRange,
   clearTimeSlots,
-  crossesMidnight,
   emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
-  isBeyondFutureBookingWindow,
-  isLikelyOutsideGeneralReservationHours,
   isSupportedReservationMinute,
   timeToMinutes,
-  usesUnsupportedReservationMinute,
 } from '../../../shared/reservation/slotPolicy.js';
 import { applyInlineSlotEdits } from '../../../shared/reservation/slotEdits.js';
 import {
-  MAX_RESERVATION_DURATION_MIN,
   SLOT_GUARD_MESSAGES,
-  getSlotDurationMinutes,
+  type SlotStateGuardReason,
+  evaluateSlotStateGuards,
   hasContextualBareTimeEdit,
-  overDurationMessage,
 } from '../../../shared/reservation/slotGuards.js';
 
 const ErrorResponse = z.object({
@@ -222,9 +217,22 @@ function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMPa
   return makeInvalidInputResult(SLOT_GUARD_MESSAGES.past_slot, ['date'], 'out_of_scope');
 }
 
-function applyFutureBookingWindowOverride(result: LLMParseResult, now: string): LLMParseResult {
-  if (!isBeyondFutureBookingWindow(result.filled_slots, now)) return result;
-  return makeInvalidInputResult(SLOT_GUARD_MESSAGES.beyond_window, ['date'], 'out_of_scope');
+const GUARD_FORCES_OUT_OF_SCOPE = new Set<SlotStateGuardReason>([
+  'beyond_window',
+  'over_duration',
+]);
+
+function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResult {
+  const outcome = evaluateSlotStateGuards(result.filled_slots, now);
+  if (!outcome) return result;
+  return {
+    ...result,
+    filled_slots: outcome.filledSlots,
+    missing_required: outcome.missingRequired,
+    ready_to_search: false,
+    intent: GUARD_FORCES_OUT_OF_SCOPE.has(outcome.reason) ? 'out_of_scope' : result.intent,
+    assistant_message: outcome.message,
+  };
 }
 
 function applyStudentCouncilBuildingDisambiguation(
@@ -311,28 +319,6 @@ async function applyExplicitSpaceCodeOverride(
   };
 }
 
-function applySameDayTimeOverride(result: LLMParseResult): LLMParseResult {
-  if (!crossesMidnight(result.filled_slots)) return result;
-  return {
-    ...result,
-    filled_slots: clearTimeSlots(result.filled_slots),
-    missing_required: ['start_time', 'end_time'],
-    ready_to_search: false,
-    assistant_message: SLOT_GUARD_MESSAGES.crosses_midnight,
-  };
-}
-
-function applyTimeGranularityOverride(result: LLMParseResult): LLMParseResult {
-  if (!usesUnsupportedReservationMinute(result.filled_slots)) return result;
-  return {
-    ...result,
-    filled_slots: clearTimeSlots(result.filled_slots),
-    missing_required: ['start_time', 'end_time'],
-    ready_to_search: false,
-    assistant_message: SLOT_GUARD_MESSAGES.unsupported_minute,
-  };
-}
-
 function applyContextualMeridiemRangeOverride(
   result: LLMParseResult,
   text: string,
@@ -346,17 +332,6 @@ function applyContextualMeridiemRangeOverride(
       };
 }
 
-function applyGeneralReservationHoursOverride(result: LLMParseResult): LLMParseResult {
-  if (!isLikelyOutsideGeneralReservationHours(result.filled_slots)) return result;
-  return {
-    ...result,
-    filled_slots: clearTimeSlots(result.filled_slots),
-    missing_required: ['start_time', 'end_time'],
-    ready_to_search: false,
-    assistant_message: SLOT_GUARD_MESSAGES.outside_hours,
-  };
-}
-
 function applyAmbiguousMeridiemSlotOverride(
   result: LLMParseResult,
   text: string,
@@ -368,19 +343,6 @@ function applyAmbiguousMeridiemSlotOverride(
     missing_required: Array.from(new Set([...result.missing_required, 'start_time'])),
     ready_to_search: false,
     assistant_message: SLOT_GUARD_MESSAGES.ambiguous_meridiem,
-  };
-}
-
-function applyDurationLimitOverride(result: LLMParseResult): LLMParseResult {
-  const durationMin = getSlotDurationMinutes(result.filled_slots);
-  if (durationMin == null || durationMin <= MAX_RESERVATION_DURATION_MIN) return result;
-  const hours = Math.round((durationMin / 60) * 10) / 10;
-  return {
-    ...result,
-    intent: 'out_of_scope',
-    ready_to_search: false,
-    missing_required: [],
-    assistant_message: overDurationMessage(hours),
   };
 }
 
@@ -415,16 +377,12 @@ function makeImpossibleInputResult(text: string, now: string): LLMParseResult | 
 export const __parseRouteTestables = {
   applyInlineSlotEdits,
   applyAmbiguousMeridiemSlotOverride,
-  applyFutureBookingWindowOverride,
+  applySlotStateGuards,
   applyImpossibleSlotOverride,
   applyContextualMeridiemRangeOverride,
-  applyGeneralReservationHoursOverride,
   extractExplicitSpaceCode,
-  applySameDayTimeOverride,
   applyStudentCenterCampusClarification,
   applyStudentCouncilBuildingDisambiguation,
-  applyTimeGranularityOverride,
-  applyDurationLimitOverride,
   applyExplicitHeadcountOverride,
   extractExplicitHeadcount,
   hasAmbiguousBareMeridiemTime,
@@ -504,12 +462,8 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           llmResult = applyStudentCouncilBuildingDisambiguation(llmResult, latestUserMessage);
           llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
-          llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
           llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
-          llmResult = applySameDayTimeOverride(llmResult);
-          llmResult = applyTimeGranularityOverride(llmResult);
-          llmResult = applyGeneralReservationHoursOverride(llmResult);
-          llmResult = applyDurationLimitOverride(llmResult);
+          llmResult = applySlotStateGuards(llmResult, body.now);
           llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
         } catch (err) {
           request.log.error({ err }, 'parseWithLLM failed');
@@ -535,12 +489,8 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           ready_to_search: true,
           assistant_message: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
         };
-        llmResult = applyFutureBookingWindowOverride(llmResult, body.now);
         llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
-        llmResult = applySameDayTimeOverride(llmResult);
-        llmResult = applyTimeGranularityOverride(llmResult);
-        llmResult = applyGeneralReservationHoursOverride(llmResult);
-        llmResult = applyDurationLimitOverride(llmResult);
+        llmResult = applySlotStateGuards(llmResult, body.now);
         llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
       }
       if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {
