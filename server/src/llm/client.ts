@@ -14,6 +14,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import { config } from '../config.js';
 import {
+  ConfidenceLevel,
   FilledSlots,
   Intent,
   type ChatMessage,
@@ -22,13 +23,30 @@ import {
   SYSTEM_PROMPT,
   TITLE_SYSTEM_PROMPT,
   renderFewShotBlock,
+  renderMemoryContextBlock,
 } from './prompts.js';
 
 const MAX_CONVERSATION_TITLE_LENGTH = 36;
 
+/**
+ * LLM 에 재사용 후보로 주입하는 최근 완료 예약 1건의 컨텍스트.
+ * 빈도 통계(count/isFrequent)는 서버가 deterministic 하게 계산해 넘기고,
+ * 재사용 제안 여부·문구는 LLM 이 결정한다.
+ */
+export interface MemoryContext {
+  id: string;
+  organization: string;
+  eventName: string;
+  purpose: string;
+  hangsaGbCode: string;
+  count: number;
+  isFrequent: boolean;
+}
+
 export interface ParseInput {
   history: ChatMessage[];
   now: string;
+  memories?: MemoryContext[];
 }
 
 export interface TitleInput {
@@ -39,7 +57,34 @@ export interface TitleInput {
 }
 
 /**
+ * LLM 이 신청서(주관단체/행사명/사용목적/행사구분)에 대해 내리는 결정.
+ * - draft: 현재까지 확정 가능한 신청서 초안(모르는 필드는 "").
+ * - confidence: 필드별 확신도. 낮으면 서버가 미수집으로 보고 되묻는다.
+ * - suggest_reuse_memory_id: 과거 예약 재사용을 제안할 때 그 메모리 id(아직 미확정 단계).
+ */
+const LLMApplication = z.object({
+  draft: z
+    .object({
+      organization: z.string(),
+      eventName: z.string(),
+      purpose: z.string(),
+      hangsaGbCode: z.string(),
+    })
+    .nullable(),
+  confidence: z.object({
+    organization: ConfidenceLevel,
+    eventName: ConfidenceLevel,
+    purpose: ConfidenceLevel,
+    hangsaGbCode: ConfidenceLevel,
+  }),
+  suggest_reuse_memory_id: z.string().nullable(),
+});
+export type LLMApplication = z.infer<typeof LLMApplication>;
+
+/**
  * LLM 이 돌려주는 JSON 스키마 — conversation_id 를 제외한 ParseResponse.
+ * application 은 모델이 누락해도 502 로 죽지 않도록 관대하게(.optional) 받는다.
+ * 누락 시 다운스트림(normalizeApplicationFromLLM)이 draft 없음으로 처리한다.
  */
 const LLMOutput = z.object({
   filled_slots: FilledSlots,
@@ -47,6 +92,7 @@ const LLMOutput = z.object({
   intent: Intent,
   ready_to_search: z.boolean(),
   assistant_message: z.string(),
+  application: LLMApplication.nullable().optional(),
 });
 
 export type LLMParseResult = z.infer<typeof LLMOutput>;
@@ -74,14 +120,15 @@ function getClient(): OpenAI {
  * conversation_id 는 호출자(parseRoute)가 책임진다.
  */
 export async function parseWithLLM(input: ParseInput): Promise<LLMParseResult> {
-  const { history, now } = input;
+  const { history, now, memories } = input;
 
   const client = getClient();
 
-  // System prompt: 본문 + few-shot + 현재 시각 주입.
+  // System prompt: 본문 + few-shot + 메모리 후보 + 현재 시각 주입.
   const systemContent = [
     SYSTEM_PROMPT,
     renderFewShotBlock(),
+    renderMemoryContextBlock(memories ?? []),
     `## 현재 시각\n현재 시각: ${now}`,
   ].join('\n\n');
 

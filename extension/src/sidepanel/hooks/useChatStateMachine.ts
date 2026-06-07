@@ -124,21 +124,29 @@ function derivePhase(s: ConversationState): ChatPhase {
     return 'meta-collect';
   }
 
-  // 3) idle / 첫 대화 — slots 누락 분기.
+  // 3) idle / 첫 대화.
   if (s.messages.length === 0) return 'starter';
+
+  // 핵심 슬롯(인원/날짜/시간)이 비면 신청서 분기보다 먼저 슬롯을 수집한다.
+  // (서버가 needs_application_collection 을 슬롯 준비 전엔 false 로 두지만, 방어적으로 슬롯 우선.)
+  const missing = new Set(s.missingRequired);
+  const slots = s.slots;
+  if (missing.has('headcount') || (slots != null && slots.headcount == null)) return 'slots-count';
+  if (
+    missing.has('end_time') ||
+    missing.has('duration_min') ||
+    (slots != null && !slots.end_time && slots.duration_min == null)
+  ) {
+    return 'slots-end';
+  }
+  if (missing.has('date') || missing.has('start_time') || missing.size > 0) return 'starter';
+  if (!slots || !slots.date || !slots.start_time) return 'starter';
+
+  // 슬롯이 충분히 찼다 — 이제 신청서 단계.
   const draft = s.applicationState?.draft;
   if (draft && !s.applicationState?.needs_application_collection) return 'draft';
   if (s.applicationState?.suggested_memory) return 'meta-p2';
   if (s.applicationState?.needs_application_collection) return 'meta-collect';
-
-  const missing = new Set(s.missingRequired);
-  if (missing.has('headcount')) return 'slots-count';
-  if (missing.has('end_time') || missing.has('duration_min')) return 'slots-end';
-  if (missing.size > 0) return 'starter';
-
-  const slots = s.slots;
-  if (slots && slots.headcount == null) return 'slots-count';
-  if (slots && !slots.end_time && slots.duration_min == null) return 'slots-end';
 
   return 'starter';
 }

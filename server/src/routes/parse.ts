@@ -21,24 +21,23 @@ import {
 } from '../schemas/parse.js';
 import {
   type LLMParseResult,
+  type MemoryContext,
   parseWithLLM,
   summarizeConversationTitle,
 } from '../llm/client.js';
 import {
   buildApplicationState,
-  parseStoredApplicationState,
+  computeMemoryStats,
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
 import {
-  applyContextualMeridiemRange,
   clearTimeSlots,
   emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
   isSupportedReservationMinute,
   timeToMinutes,
 } from '../../../shared/reservation/slotPolicy.js';
-import { applyInlineSlotEdits } from '../../../shared/reservation/slotEdits.js';
 import {
   SLOT_GUARD_MESSAGES,
   STUDENT_CENTER_CAMPUS_MESSAGE,
@@ -146,35 +145,6 @@ function localMinutesFromIso(value: string): number | null {
   return hour * 60 + minute;
 }
 
-function extractExplicitHeadcount(text: string): number | null {
-  let latest: number | null = null;
-  const matches = text.replace(/,/g, '').matchAll(/(^|[^\d])(\d{1,4})\s*명/g);
-  for (const match of matches) {
-    const value = Number.parseInt(match[2] ?? '', 10);
-    if (Number.isFinite(value) && value > 0) latest = value;
-  }
-  return latest;
-}
-
-/**
- * LLM 보정 가드: 사용자가 "N명"을 명시했는데 LLM 이 headcount 를 다르게/누락해
- * 채우는 경우가 있어, 원문에서 마지막 "N명"을 다시 추출해 덮어쓴다.
- */
-function applyExplicitHeadcountOverride(
-  result: LLMParseResult,
-  text: string,
-): LLMParseResult {
-  const headcount = extractExplicitHeadcount(text);
-  if (headcount == null || result.filled_slots.headcount === headcount) return result;
-  return {
-    ...result,
-    filled_slots: {
-      ...result.filled_slots,
-      headcount,
-    },
-  };
-}
-
 function extractExplicitKoreanClockMinutes(text: string): number | null {
   const match = text.match(
     /(오전|오후|아침|점심|낮|저녁|밤|새벽)?\s*(\d{1,2})\s*시(?!간)(?:\s*(반|[0-5]?\d\s*분))?/,
@@ -239,29 +209,6 @@ function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResu
     ready_to_search: false,
     intent: GUARD_FORCES_OUT_OF_SCOPE.has(outcome.reason) ? 'out_of_scope' : result.intent,
     assistant_message: outcome.message,
-  };
-}
-
-/**
- * LLM 보정 가드: LLM 이 "학생회"(단체)를 건물 "학생회관"으로 과추론하는 경우가
- * 있어, 사용자가 "학생회관"이라 말하지 않았다면 building 을 비운다.
- * 근본 해결은 프롬프트 보강이지만 LLM eval 전까지의 안전망.
- */
-function applyStudentCouncilBuildingDisambiguation(
-  result: LLMParseResult,
-  text: string,
-): LLMParseResult {
-  const building = result.filled_slots.building?.trim();
-  if (building !== '학생회관') return result;
-  if (mentionsStudentCenter(text)) return result;
-  if (!/학생\s*회/.test(text)) return result;
-
-  return {
-    ...result,
-    filled_slots: {
-      ...result.filled_slots,
-      building: null,
-    },
   };
 }
 
@@ -333,19 +280,6 @@ async function applyExplicitSpaceCodeOverride(
   };
 }
 
-function applyContextualMeridiemRangeOverride(
-  result: LLMParseResult,
-  text: string,
-): LLMParseResult {
-  const filledSlots = applyContextualMeridiemRange(result.filled_slots, text);
-  return filledSlots === result.filled_slots
-    ? result
-    : {
-        ...result,
-        filled_slots: filledSlots,
-      };
-}
-
 function applyAmbiguousMeridiemSlotOverride(
   result: LLMParseResult,
   text: string,
@@ -389,16 +323,11 @@ function makeImpossibleInputResult(text: string, now: string): LLMParseResult | 
 }
 
 export const __parseRouteTestables = {
-  applyInlineSlotEdits,
   applyAmbiguousMeridiemSlotOverride,
   applySlotStateGuards,
   applyImpossibleSlotOverride,
-  applyContextualMeridiemRangeOverride,
   extractExplicitSpaceCode,
   applyStudentCenterCampusClarification,
-  applyStudentCouncilBuildingDisambiguation,
-  applyExplicitHeadcountOverride,
-  extractExplicitHeadcount,
   hasAmbiguousBareMeridiemTime,
   hasUnsupportedMinuteUnit,
   hasImpossibleClock,
@@ -453,64 +382,9 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       const previousFilledSlots =
         parseStoredFilledSlots(existing?.lastFilledSlots ?? null) ??
         parseStoredFilledSlots(body.client_last_filled_slots ?? null);
-      const previousApplicationState =
-        parseStoredApplicationState(existing?.lastApplicationState ?? null) ??
-        parseStoredApplicationState(body.client_last_application_state ?? null);
 
-      // 2) LLM 호출. 명백한 잡담은 LLM 실패에 의존하지 않고 로컬에서 안전하게 안내한다.
-      let llmResult: LLMParseResult;
-      const impossibleInputResult = makeImpossibleInputResult(latestUserMessage, body.now);
-      if (impossibleInputResult) {
-        llmResult = applyExplicitHeadcountOverride(impossibleInputResult, latestUserMessage);
-      } else if (isSymbolOnlyInput(latestUserMessage)) {
-        llmResult = makeInvalidInputResult(
-          '예약할 날짜, 시간, 인원처럼 이해할 수 있는 내용으로 다시 알려주세요.',
-          ['headcount', 'date', 'start_time', 'end_time'],
-        );
-      } else if (isLikelyOutOfScopeSmallTalk(latestUserMessage)) {
-        llmResult = makeOutOfScopeResult();
-      } else {
-        try {
-          llmResult = await parseWithLLM({ history: body.history, now: body.now });
-          llmResult = applyExplicitHeadcountOverride(llmResult, latestUserMessage);
-          llmResult = applyStudentCouncilBuildingDisambiguation(llmResult, latestUserMessage);
-          llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
-          llmResult = applyImpossibleSlotOverride(llmResult, body.now);
-          llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
-          llmResult = applySlotStateGuards(llmResult, body.now);
-          llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
-        } catch (err) {
-          request.log.error({ err }, 'parseWithLLM failed');
-          reply.code(502).send({
-            error: 'llm parse failed',
-            message: err instanceof Error ? err.message : String(err),
-          });
-          return;
-        }
-      }
-
-      const inlineSlotEdits = applyInlineSlotEdits(
-        previousFilledSlots,
-        latestUserMessage,
-        body.now,
-      );
-      if (inlineSlotEdits) {
-        llmResult = {
-          ...llmResult,
-          intent: 'modify_slot',
-          filled_slots: inlineSlotEdits,
-          missing_required: [],
-          ready_to_search: true,
-          assistant_message: '조건을 수정했어요. 같은 조건으로 다시 검색할게요.',
-        };
-        llmResult = applyContextualMeridiemRangeOverride(llmResult, latestUserMessage);
-        llmResult = applySlotStateGuards(llmResult, body.now);
-        llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
-      }
-      if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {
-        llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
-      }
-
+      // 재사용 후보(최근 완료 예약) + 빈도 통계를 먼저 계산해 LLM context 로 주입한다.
+      // 통계는 deterministic, 재사용 제안 여부·문구는 LLM 이 결정한다.
       const memories = await app.prisma.conversation.findMany({
         where: {
           clientId,
@@ -539,27 +413,81 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
         })
         .filter((row): row is NonNullable<typeof row> => row !== null);
 
-      const applicationResult = buildApplicationState({
-        history: body.history,
-        latestUserMessage,
-        baseIntent: llmResult.intent,
-        baseAssistantMessage: llmResult.assistant_message,
+      const memoryStats = computeMemoryStats(memoryCandidates);
+      const memoryContext: MemoryContext[] = memoryStats.map((stat) => ({
+        id: stat.conversationId,
+        organization: stat.formData.organization,
+        eventName: stat.formData.eventName,
+        purpose: stat.formData.purpose,
+        hangsaGbCode: stat.formData.hangsaGbCode,
+        count: stat.count,
+        isFrequent: stat.isFrequent,
+      }));
+
+      // 2) LLM 호출. 명백한 잡담은 LLM 실패에 의존하지 않고 로컬에서 안전하게 안내한다.
+      let llmResult: LLMParseResult;
+      const impossibleInputResult = makeImpossibleInputResult(latestUserMessage, body.now);
+      if (impossibleInputResult) {
+        llmResult = impossibleInputResult;
+      } else if (isSymbolOnlyInput(latestUserMessage)) {
+        llmResult = makeInvalidInputResult(
+          '예약할 날짜, 시간, 인원처럼 이해할 수 있는 내용으로 다시 알려주세요.',
+          ['headcount', 'date', 'start_time', 'end_time'],
+        );
+      } else if (isLikelyOutOfScopeSmallTalk(latestUserMessage)) {
+        llmResult = makeOutOfScopeResult();
+      } else {
+        try {
+          // LLM 이 슬롯·신청서·intent·메시지를 결정한다(단일 권한). 아래는 추출이 아니라
+          // 정책 위반을 사후 교정하는 하드 가드뿐이다: 과거 시각, 캠퍼스 모호성,
+          // 슬롯 상태 위반(미래창/자정/30분/시간대/길이), 공간코드 DB 보강.
+          llmResult = await parseWithLLM({
+            history: body.history,
+            now: body.now,
+            memories: memoryContext,
+          });
+          llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
+          llmResult = applyImpossibleSlotOverride(llmResult, body.now);
+          llmResult = applySlotStateGuards(llmResult, body.now);
+          llmResult = await applyExplicitSpaceCodeOverride(app, llmResult, latestUserMessage);
+        } catch (err) {
+          request.log.error({ err }, 'parseWithLLM failed');
+          reply.code(502).send({
+            error: 'llm parse failed',
+            message: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
+      }
+
+      // 인라인 슬롯 편집("아니 30명으로")은 이제 LLM 이 history 맥락으로 직접 처리한다.
+      // 여기서는 LLM 이 오전/오후를 단정하지 못할 입력을 사후에 비워 되묻는 가드만 남긴다.
+      if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {
+        llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
+      }
+
+      // 신청서 상태는 LLM 의 application 출력을 정규화해 조립한다(추출/분류/메시지 재작성 없음).
+      // 길이 초과 같은 하드 검증에서만 LLM 메시지를 덮어쓴다.
+      const { applicationState, assistantMessageOverride } = buildApplicationState({
+        llmApplication: llmResult.application,
         filledSlots: llmResult.filled_slots,
         readyToSearch: llmResult.ready_to_search,
-        previousState: previousApplicationState,
-        memories: memoryCandidates,
+        memoryStats,
       });
+      const assistantMessage = assistantMessageOverride ?? llmResult.assistant_message;
 
       const response: ParseResponse = {
         conversation_id: body.conversation_id,
-        ...llmResult,
-        intent: applicationResult.intent,
-        assistant_message: applicationResult.assistantMessage,
-        application_state: applicationResult.applicationState,
+        filled_slots: llmResult.filled_slots,
+        missing_required: llmResult.missing_required,
+        intent: llmResult.intent,
+        ready_to_search: llmResult.ready_to_search,
+        assistant_message: assistantMessage,
+        application_state: applicationState,
       };
 
       let generatedTitle: string | null = null;
-      if (!existing?.title && llmResult.ready_to_search && applicationResult.intent !== 'cancel') {
+      if (!existing?.title && llmResult.ready_to_search && llmResult.intent !== 'cancel') {
         try {
           generatedTitle = await summarizeConversationTitle({
             history: body.history,
@@ -573,8 +501,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       // 3) Conversation mirror upsert (D-018).
       //   - status: 기본 active. intent=cancel 이면 abandoned_user.
       //   - completed 마킹은 실제 예약 제출 시 별도 라우트에서. 여기선 active/abandoned_user 만 다룬다.
-      const nextStatus =
-        applicationResult.intent === 'cancel' ? 'abandoned_user' : 'active';
+      const nextStatus = llmResult.intent === 'cancel' ? 'abandoned_user' : 'active';
 
       try {
         await app.prisma.conversation.upsert({
@@ -585,16 +512,16 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
             status: nextStatus,
             history: body.history,
             ...(generatedTitle ? { title: generatedTitle } : {}),
-            lastIntent: applicationResult.intent,
+            lastIntent: llmResult.intent,
             lastFilledSlots: llmResult.filled_slots,
-            lastApplicationState: applicationResult.applicationState,
+            lastApplicationState: applicationState,
           },
           update: {
             history: body.history,
             ...(generatedTitle ? { title: generatedTitle } : {}),
-            lastIntent: applicationResult.intent,
+            lastIntent: llmResult.intent,
             lastFilledSlots: llmResult.filled_slots,
-            lastApplicationState: applicationResult.applicationState,
+            lastApplicationState: applicationState,
             status: nextStatus,
           },
         });

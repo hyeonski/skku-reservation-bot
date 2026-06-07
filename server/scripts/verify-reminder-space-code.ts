@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 
 import { buildReminderCandidate, type ReminderPatternInput } from '../src/application/reminders.js';
-import { buildApplicationState } from '../src/application/state.js';
 
 process.env.LLM_API_KEY ??= 'verify-only';
 process.env.DATABASE_URL ??= 'mysql://user:password@localhost:3306/verify';
@@ -63,38 +62,6 @@ assert.equal(
   '400126',
   'parse explicit space code override can extract the reminder prompt code',
 );
-{
-  const application = buildApplicationState({
-    history: [{ role: 'user', content: repeatedWithCode.prompt, ts: new Date().toISOString() }],
-    latestUserMessage: repeatedWithCode.prompt,
-    baseIntent: 'modify_slot',
-    baseAssistantMessage: '요청을 확인했어요.',
-    filledSlots: {
-      date: repeatedWithCode.proposedDate,
-      start_time: repeatedWithCode.startTime,
-      end_time: repeatedWithCode.endTime,
-      duration_min: 120,
-      headcount: repeatedWithCode.headcount,
-      campus: null,
-      building: null,
-      space: null,
-    },
-    readyToSearch: true,
-    previousState: null,
-    memories: [],
-  });
-  assert.equal(
-    application.applicationState.draft?.eventName,
-    '운영회의',
-    'accept-reminder prompt keeps the event name as the stored form value',
-  );
-  assert.equal(
-    application.applicationState.needs_application_collection,
-    false,
-    'accept-reminder prompt creates a complete application draft',
-  );
-}
-
 const repeatedCodeOnly = buildReminderCandidate(
   [
     input('code-only-1', '2026-05-04', null, '111111'),

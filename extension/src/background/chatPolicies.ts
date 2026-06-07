@@ -90,10 +90,12 @@ function applicationLengthIssueMessage(issue: ApplicationLengthIssue): string {
 }
 
 export function emptyApplicationState(): ApplicationState {
+  // 기본값은 "아직 수집할 신청서 없음" — 슬롯도 없는 첫 턴/취소/오류 폴백에서
+  // 신청서 수집 단계로 잘못 빠지지 않도록 needs=false. (수집 시작 여부는 서버 LLM 이 결정)
   return {
     draft: null,
-    missing_application: ['organization', 'eventName', 'purpose', 'hangsaGbCode'],
-    needs_application_collection: true,
+    missing_application: [],
+    needs_application_collection: false,
     suggested_memory: null,
     recommendation: null,
     confidence: {
