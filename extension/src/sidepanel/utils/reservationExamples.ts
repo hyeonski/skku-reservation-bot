@@ -1,5 +1,3 @@
-const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];
-
 function addDays(base: Date, days: number): Date {
   const next = new Date(base);
   next.setDate(next.getDate() + days);
@@ -7,7 +5,7 @@ function addDays(base: Date, days: number): Date {
 }
 
 function formatKoreanDate(date: Date): string {
-  return `${date.getMonth() + 1}월 ${date.getDate()}일(${WEEKDAYS[date.getDay()]})`;
+  return `${date.getMonth() + 1}월 ${date.getDate()}일`;
 }
 
 export function getReservationExamples(now = new Date()): string[] {
