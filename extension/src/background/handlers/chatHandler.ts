@@ -12,10 +12,7 @@ import {
   emptyApplicationState,
 } from '../chatPolicies';
 import { getOrCreateContext, pendingStarts, persistContexts } from '../contextStore';
-import {
-  mirrorConversation,
-  syncConversationSummaryFromContext,
-} from '../conversationPersistence';
+import { mirrorConversation } from '../conversationPersistence';
 import {
   syncApplicationDraftToAutomation,
   syncDraftHeadcountFromSlots,
@@ -124,7 +121,6 @@ export async function handleChatRequest(
     ];
     ctx.history = historyWithAssistant;
     void persistContexts();
-    void syncConversationSummaryFromContext(ctx);
     void mirrorConversation(
       msg.conversationId,
       {
@@ -168,7 +164,6 @@ export async function handleChatRequest(
     ];
     ctx.history = historyWithAssistant;
     void persistContexts();
-    void syncConversationSummaryFromContext(ctx);
     void mirrorConversation(
       msg.conversationId,
       {
@@ -257,7 +252,6 @@ export async function handleChatRequest(
   ];
   ctx.history = historyWithAssistant;
   void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
 
   void mirrorConversation(
     msg.conversationId,

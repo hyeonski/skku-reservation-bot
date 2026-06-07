@@ -8,8 +8,6 @@ import type {
 
 export const ACTIVE_CONVERSATION_ID_KEY = 'gls_active_conversation_id_v1';
 export const LEGACY_CONVERSATION_ID_KEY = 'gls_conversation_id_v1';
-export const CONVERSATION_INDEX_KEY = 'gls_conversation_index_v1';
-export const SNAPSHOT_PREFIX = 'gls_popup_snapshot_v1_';
 export const MAX_CONVERSATION_INDEX_ITEMS = 10;
 export const MAX_CONVERSATION_TITLE_LENGTH = 36;
 
@@ -118,31 +116,3 @@ export function makeConversationSessionSummary(
   };
 }
 
-export function isPlaceholderConversationSummary(
-  summary: ConversationSessionSummary,
-): boolean {
-  return (
-    summary.title === '새 대화' &&
-    normalizeWhitespace(summary.lastMessagePreview).length === 0
-  );
-}
-
-export function mergeConversationSessionSummaries(
-  ...collections: ConversationSessionSummary[][]
-): ConversationSessionSummary[] {
-  const merged = new Map<string, ConversationSessionSummary>();
-
-  for (const collection of collections) {
-    for (const item of collection) {
-      const existing = merged.get(item.id);
-      if (!existing || new Date(item.updatedAt).getTime() >= new Date(existing.updatedAt).getTime()) {
-        merged.set(item.id, item);
-      }
-    }
-  }
-
-  return [...merged.values()]
-    .filter((summary) => !isPlaceholderConversationSummary(summary))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    .slice(0, MAX_CONVERSATION_INDEX_ITEMS);
-}

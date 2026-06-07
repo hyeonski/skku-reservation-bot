@@ -1,17 +1,9 @@
-import type {
-  ChatMessage,
-  ConversationSessionSummary,
-  ReservationFormData,
-} from '../shared/types';
+import type { ConversationSessionSummary } from '../shared/types';
 import {
-  CONVERSATION_INDEX_KEY,
-  isPlaceholderConversationSummary,
   makeConversationSessionSummary,
-  mergeConversationSessionSummaries,
+  MAX_CONVERSATION_INDEX_ITEMS,
   shouldAppearInConversationHistory,
-  SNAPSHOT_PREFIX,
 } from '../shared/conversationSessions';
-import { emptyFilledSlots } from '../../../shared/reservation/slotPolicy';
 import * as apiClient from './apiClient';
 import {
   contexts,
@@ -20,61 +12,15 @@ import {
   type ConversationContext,
 } from './contextStore';
 
-export async function loadConversationIndex(): Promise<ConversationSessionSummary[]> {
-  try {
-    const got = await chrome.storage.local.get(CONVERSATION_INDEX_KEY);
-    const stored = got?.[CONVERSATION_INDEX_KEY];
-    return Array.isArray(stored)
-      ? (stored as ConversationSessionSummary[]).filter(
-          (summary) => !isPlaceholderConversationSummary(summary),
-        )
-      : [];
-  } catch {
-    return [];
-  }
-}
+// 서버가 대화 목록·내용의 단일 진실(source of truth)이다.
+// 클라이언트는 chrome.storage.local에 어떤 대화 데이터도 영속화하지 않는다.
+// 진행 중 자동화 런타임 상태(lastStatus/lastProposed/pendingStart 등)만
+// chrome.storage.session(contextStore)에 휘발성으로 백업해 SW 재시작을 견딘다.
 
-export async function saveConversationIndex(
-  index: ConversationSessionSummary[],
-): Promise<void> {
-  try {
-    await chrome.storage.local.set({ [CONVERSATION_INDEX_KEY]: index });
-  } catch {
-    // non-fatal
-  }
-}
-
-export async function removeConversationIndexEntry(
-  conversationId: string,
-): Promise<ConversationSessionSummary[]> {
-  const current = await loadConversationIndex();
-  const next = current.filter((item) => item.id !== conversationId);
-  await saveConversationIndex(next);
-  return next;
-}
-
-export async function persistConversationSnapshot(ctx: ConversationContext): Promise<void> {
-  try {
-    await chrome.storage.local.set({
-      [`${SNAPSHOT_PREFIX}${ctx.conversationId}`]: {
-        history: ctx.history,
-        lastFilledSlots: ctx.lastFilledSlots,
-        applicationState: ctx.applicationState,
-        conversationStatus: ctx.conversationStatus,
-        lastStatus: ctx.lastStatus,
-        lastProposed: ctx.lastProposed,
-        pendingFormData: ctx.pendingStart?.pendingFormData ?? null,
-        confirmedReservationLabel: ctx.confirmedReservationLabel,
-        confirmedSpaceCode: ctx.confirmedSpaceCode,
-        confirmedSpaceLabel: ctx.confirmedSpaceLabel,
-        updatedAt: ctx.updatedAt,
-      },
-    });
-  } catch {
-    // local snapshot is a resilience aid; never block the live flow.
-  }
-}
-
+/**
+ * 서버 미동기화/오프라인 폴백 전용. 서버에 도달 못 했을 때만 인메모리 컨텍스트로
+ * 목록을 임시 구성한다. 영속 저장소가 아니므로 삭제된 대화를 부활시키지 않는다.
+ */
 export function buildSummaryFromContext(
   ctx: ConversationContext,
 ): ConversationSessionSummary {
@@ -121,43 +67,24 @@ export function buildSummaryFromServer(
   });
 }
 
-export async function syncConversationIndexWithSummary(
-  summary: ConversationSessionSummary,
-): Promise<ConversationSessionSummary[]> {
-  const current = await loadConversationIndex();
-  const next = mergeConversationSessionSummaries(current, [summary]);
-  await saveConversationIndex(next);
-  return next;
+function sortAndCap(summaries: ConversationSessionSummary[]): ConversationSessionSummary[] {
+  return [...summaries]
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, MAX_CONVERSATION_INDEX_ITEMS);
 }
 
-export async function syncConversationSummaryFromContext(
-  ctx: ConversationContext,
-): Promise<ConversationSessionSummary[]> {
-  if (
-    !shouldAppearInConversationHistory({
-      status: ctx.conversationStatus,
-      messages: ctx.history,
-      lastFilledSlots: ctx.lastFilledSlots,
-      applicationState: ctx.applicationState,
-      confirmedReservationLabel: ctx.confirmedReservationLabel,
-    })
-  ) {
-    await removeConversationSnapshot(ctx.conversationId);
-    return removeConversationIndexEntry(ctx.conversationId);
-  }
-  await persistConversationSnapshot(ctx);
-  return syncConversationIndexWithSummary(buildSummaryFromContext(ctx));
-}
-
-export async function refreshConversationIndexFromServer(): Promise<
-  ConversationSessionSummary[]
-> {
-  const localIndex = await loadConversationIndex();
+/** 서버 권위 목록. 서버 응답만으로 구성하며 로컬과 머지하지 않는다. */
+export async function listConversationsFromServer(): Promise<ConversationSessionSummary[]> {
   const remoteRows = await apiClient.listConversations();
-  const remoteIndex = remoteRows
+  const summaries = remoteRows
     .map((row) => buildSummaryFromServer(row))
     .filter((row): row is ConversationSessionSummary => row !== null);
-  const contextIndex = [...contexts.values()]
+  return sortAndCap(summaries);
+}
+
+/** 서버 도달 불가 시에만 쓰는 인메모리 폴백 목록(영속 아님). */
+export function listConversationsFromMemory(): ConversationSessionSummary[] {
+  const summaries = [...contexts.values()]
     .filter((ctx) =>
       shouldAppearInConversationHistory({
         status: ctx.conversationStatus,
@@ -168,93 +95,42 @@ export async function refreshConversationIndexFromServer(): Promise<
       }),
     )
     .map((ctx) => buildSummaryFromContext(ctx));
-  const merged = mergeConversationSessionSummaries(localIndex, remoteIndex, contextIndex);
-  await saveConversationIndex(merged);
-  return merged;
+  return sortAndCap(summaries);
 }
 
-export async function removeConversationSnapshot(conversationId: string): Promise<void> {
-  try {
-    await chrome.storage.local.remove(`${SNAPSHOT_PREFIX}${conversationId}`);
-  } catch {
-    // non-fatal
-  }
-}
-
-export async function hydrateContextFromSnapshot(
-  conversationId: string,
-): Promise<ConversationContext | null> {
-  try {
-    const got = await chrome.storage.local.get(`${SNAPSHOT_PREFIX}${conversationId}`);
-    const snapshot = got?.[`${SNAPSHOT_PREFIX}${conversationId}`] as
-      | Partial<ConversationContext & { pendingFormData: ReservationFormData | null }>
-      | undefined;
-    if (!snapshot) return null;
-    const ctx = getOrCreateContext(conversationId);
-    ctx.history = Array.isArray(snapshot.history) ? snapshot.history : [];
-    ctx.lastFilledSlots = snapshot.lastFilledSlots ?? null;
-    ctx.applicationState = snapshot.applicationState ?? null;
-    ctx.conversationStatus = snapshot.conversationStatus ?? 'active';
-    ctx.lastStatus = snapshot.lastStatus ?? { kind: 'idle' };
-    ctx.lastProposed = snapshot.lastProposed ?? null;
-    ctx.pendingStart = snapshot.pendingFormData
-      ? {
-          conversationId,
-          slots: ctx.lastFilledSlots ?? emptyFilledSlots(),
-          pendingFormData: snapshot.pendingFormData,
-        }
-      : null;
-    ctx.confirmedReservationLabel = snapshot.confirmedReservationLabel ?? null;
-    ctx.confirmedSpaceCode = snapshot.confirmedSpaceCode ?? null;
-    ctx.confirmedSpaceLabel = snapshot.confirmedSpaceLabel ?? null;
-    ctx.updatedAt = snapshot.updatedAt ?? new Date().toISOString();
-    await persistContexts();
-    return ctx;
-  } catch {
-    return null;
-  }
-}
-
-export async function hydrateContextFromSummary(
-  conversationId: string,
-): Promise<ConversationContext | null> {
-  const summary = (await loadConversationIndex()).find((item) => item.id === conversationId);
-  if (!summary) return null;
-  const ctx = getOrCreateContext(conversationId);
-  ctx.history = summary.lastMessagePreview
-    ? [{ role: 'assistant', content: summary.lastMessagePreview, ts: summary.updatedAt }]
-    : [];
-  ctx.conversationStatus = summary.status;
-  ctx.lastStatus =
-    summary.status === 'completed'
-      ? { kind: 'done', spaceCode: summary.confirmedSpaceCode ?? 'completed' }
-      : { kind: 'idle' };
-  ctx.confirmedReservationLabel = summary.confirmedReservationLabel ?? null;
-  ctx.confirmedSpaceCode = summary.confirmedSpaceCode ?? null;
-  ctx.confirmedSpaceLabel = summary.confirmedSpaceLabel ?? null;
-  ctx.updatedAt = summary.updatedAt;
+/**
+ * 명시적 부재(404/삭제) 시 클라이언트 런타임 흔적을 제거한다.
+ * 로컬 영속 캐시가 없으므로 인메모리 + 세션 백업만 정리하면 된다.
+ */
+export async function purgeConversationLocally(conversationId: string): Promise<void> {
+  contexts.delete(conversationId);
   await persistContexts();
-  return ctx;
 }
 
 function preferRuntimeStatus(
   previous: ConversationContext['lastStatus'] | undefined,
-  snapshot: ConversationContext['lastStatus'] | undefined,
 ): ConversationContext['lastStatus'] {
   if (previous && previous.kind !== 'idle') return previous;
-  return snapshot ?? previous ?? { kind: 'idle' };
+  return previous ?? { kind: 'idle' };
 }
 
+/**
+ * 서버를 권위로 대화 내용을 복원한다. 서버에 없는 런타임 상태
+ * (lastStatus/lastProposed/pendingStart/loginPrompt)는 인메모리(세션 백업에서
+ * 복원된) 이전 컨텍스트에서 그대로 보존한다. 404면 null을 반환한다.
+ */
 export async function hydrateContextFromServer(
   conversationId: string,
 ): Promise<ConversationContext | null> {
   try {
     const dto = await apiClient.getConversation(conversationId);
+    // 서버에 없는 진행 중 런타임은 덮어쓰기 전에 먼저 보존한다.
     const previous = contexts.get(conversationId);
-    const got = await chrome.storage.local.get(`${SNAPSHOT_PREFIX}${conversationId}`);
-    const snapshot = got?.[`${SNAPSHOT_PREFIX}${conversationId}`] as
-      | Partial<Pick<ConversationContext, 'lastStatus' | 'lastProposed'>>
-      | undefined;
+    const runtimeStatus = previous?.lastStatus;
+    const runtimeProposed = previous?.lastProposed ?? null;
+    const runtimePending = previous?.pendingStart ?? null;
+    const runtimeLogin = previous?.loginPrompt ?? null;
+
     const ctx = getOrCreateContext(conversationId);
     ctx.history = dto.history;
     ctx.title = dto.title;
@@ -266,12 +142,11 @@ export async function hydrateContextFromServer(
     ctx.confirmedSpaceCode = dto.confirmedSpaceCode;
     ctx.confirmedSpaceLabel = dto.confirmedSpaceLabel;
     ctx.updatedAt = dto.updatedAt;
-    ctx.lastStatus = preferRuntimeStatus(previous?.lastStatus, snapshot?.lastStatus);
-    ctx.pendingStart = null;
-    ctx.lastProposed = previous?.lastProposed ?? snapshot?.lastProposed ?? null;
-    ctx.loginPrompt = null;
+    ctx.lastStatus = preferRuntimeStatus(runtimeStatus);
+    ctx.lastProposed = runtimeProposed;
+    ctx.pendingStart = runtimePending;
+    ctx.loginPrompt = runtimeLogin;
     await persistContexts();
-    await syncConversationSummaryFromContext(ctx);
     return ctx;
   } catch (error) {
     if (error instanceof apiClient.ApiError && error.status === 404) {
@@ -297,8 +172,25 @@ export async function mirrorConversation(
     ctx.confirmedSpaceLabel = dto.confirmedSpaceLabel;
     ctx.updatedAt = dto.updatedAt;
     await persistContexts();
-    await syncConversationSummaryFromContext(ctx);
   } catch (e) {
     console.warn(warnLabel, e);
+  }
+}
+
+/**
+ * 레거시 chrome.storage.local 대화 캐시(인덱스 + 스냅샷) 일괄 제거.
+ * 서버-권위 전환 이전에 쌓인 stale 데이터를 청소한다. SW 시작 시 1회 호출.
+ */
+export async function purgeLegacyLocalStorage(): Promise<void> {
+  const LEGACY_INDEX_KEY = 'gls_conversation_index_v1';
+  const LEGACY_SNAPSHOT_PREFIX = 'gls_popup_snapshot_v1_';
+  try {
+    const all = await chrome.storage.local.get(null);
+    const keys = Object.keys(all).filter(
+      (k) => k === LEGACY_INDEX_KEY || k.startsWith(LEGACY_SNAPSHOT_PREFIX),
+    );
+    if (keys.length > 0) await chrome.storage.local.remove(keys);
+  } catch {
+    // non-fatal
   }
 }

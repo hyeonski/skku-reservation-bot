@@ -4,7 +4,6 @@ import * as gls from '../glsCoordinator';
 import { getOrCreateContext, persistContexts } from '../contextStore';
 import {
   mirrorConversation,
-  syncConversationSummaryFromContext,
 } from '../conversationPersistence';
 import { syncApplicationDraftToAutomation } from '../automationState';
 
@@ -57,7 +56,6 @@ export async function handleApplySuggestedMemory(
   ctx.updatedAt = new Date().toISOString();
   syncApplicationDraftToAutomation(ctx, formData);
   void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
   void mirrorConversation(
     msg.conversationId,
     {
@@ -99,7 +97,6 @@ export async function handleDismissSuggestedMemory(
   ctx.updatedAt = new Date().toISOString();
   syncApplicationDraftToAutomation(ctx, null);
   void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
   void mirrorConversation(
     msg.conversationId,
     {

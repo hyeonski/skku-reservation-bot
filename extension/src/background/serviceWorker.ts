@@ -41,10 +41,13 @@ import {
   handleGetStatus,
   handleListConversations,
 } from './handlers/conversationHandlers';
+import { purgeLegacyLocalStorage } from './conversationPersistence';
 
 const rehydrationReady = (async () => {
   await rehydrateContexts();
   await gls.waitForQueuesRehydrated();
+  // 서버-권위 전환 이전에 쌓인 레거시 로컬 대화 캐시(인덱스+스냅샷)를 1회 청소한다.
+  void purgeLegacyLocalStorage();
 })();
 
 chrome.runtime.onInstalled.addListener(() => {

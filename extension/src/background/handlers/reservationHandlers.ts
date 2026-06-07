@@ -13,7 +13,6 @@ import {
 } from '../contextStore';
 import {
   mirrorConversation,
-  syncConversationSummaryFromContext,
 } from '../conversationPersistence';
 import {
   hasCompleteReservationForm,
@@ -146,7 +145,6 @@ export async function handleStartSearch(
   pendingStarts.set(msg.conversationId, pending);
   ctx.pendingStart = pending;
   void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
 
   void gls
     .runReservationFlow({
@@ -287,7 +285,6 @@ export async function handleConfirm(
         ctx.confirmedSpaceLabel = summarizeSpaceLabel(candidate);
         ctx.updatedAt = new Date().toISOString();
         void persistContexts();
-        void syncConversationSummaryFromContext(ctx);
         void mirrorConversation(
           msg.conversationId,
           {
@@ -375,7 +372,6 @@ export async function handleCancel(
   ctx.conversationStatus = 'abandoned_user';
   ctx.updatedAt = new Date().toISOString();
   void persistContexts();
-  void syncConversationSummaryFromContext(ctx);
   try {
     const abandoned = await apiClient.abandonConversation(msg.conversationId);
     ctx.history = abandoned.history;
@@ -388,7 +384,6 @@ export async function handleCancel(
     ctx.confirmedSpaceLabel = abandoned.confirmedSpaceLabel;
     ctx.updatedAt = abandoned.updatedAt;
     await persistContexts();
-    await syncConversationSummaryFromContext(ctx);
   } catch (e) {
     console.warn('[SW] abandonConversation failed:', e);
   }

@@ -9,12 +9,9 @@ import {
 } from '../contextStore';
 import {
   hydrateContextFromServer,
-  hydrateContextFromSnapshot,
-  hydrateContextFromSummary,
-  loadConversationIndex,
-  refreshConversationIndexFromServer,
-  removeConversationIndexEntry,
-  removeConversationSnapshot,
+  listConversationsFromMemory,
+  listConversationsFromServer,
+  purgeConversationLocally,
 } from '../conversationPersistence';
 import { resumePendingStartIfReady } from './reservationHandlers';
 
@@ -24,19 +21,20 @@ export async function handleGetStatus(
 ) {
   await rehydrationReady;
   await resumePendingStartIfReady(msg.conversationId);
-  let ctx: ConversationContext | null = contexts.get(msg.conversationId) ?? null;
-  if (!ctx || ctx.history.length === 0) {
-    ctx =
-      (await hydrateContextFromServer(msg.conversationId)) ??
-      (await hydrateContextFromSnapshot(msg.conversationId)) ??
-      ctx ??
-      (await hydrateContextFromSummary(msg.conversationId));
-  }
-  const localSummary = (await loadConversationIndex()).find(
-    (item) => item.id === msg.conversationId,
-  );
-  if (localSummary?.status === 'completed' && ctx?.conversationStatus !== 'completed') {
-    ctx = await hydrateContextFromSummary(msg.conversationId);
+  // 서버가 대화 내용의 권위. 매 조회마다 서버에서 가져오고, 서버에 없는 진행 중
+  // 런타임(상태/후보/대기 폼)은 hydrateContextFromServer가 인메모리에서 보존한다.
+  const previous = contexts.get(msg.conversationId) ?? null;
+  let ctx: ConversationContext | null;
+  try {
+    ctx = await hydrateContextFromServer(msg.conversationId);
+    if (!ctx) {
+      // 404 = 명시적 부재(삭제/초기화). 로컬 런타임 흔적을 지우고 빈 상태 반환.
+      await purgeConversationLocally(msg.conversationId);
+    }
+  } catch (e) {
+    // 서버 도달 불가(오프라인 등) → 인메모리 폴백(영속 아님). 부활 위험 없음.
+    console.warn('[SW] getStatus server fetch failed; using in-memory ctx:', e);
+    ctx = previous;
   }
   const queue = gls.getQueue(msg.conversationId);
   const restoredStatus =
@@ -57,13 +55,12 @@ export async function handleGetStatus(
 
 export async function handleListConversations(rehydrationReady: Promise<void>) {
   await rehydrationReady;
-  const localIndex = await loadConversationIndex();
   try {
-    const conversations = await refreshConversationIndexFromServer();
+    const conversations = await listConversationsFromServer();
     return { ok: true, conversations };
   } catch (e) {
-    console.warn('[SW] listConversations refresh failed:', e);
-    return { ok: true, conversations: localIndex };
+    console.warn('[SW] listConversations failed; using in-memory fallback:', e);
+    return { ok: true, conversations: listConversationsFromMemory() };
   }
 }
 
@@ -74,19 +71,11 @@ export async function handleDeleteConversation(
   pendingStarts.delete(msg.conversationId);
   contexts.delete(msg.conversationId);
   await persistContexts();
-  await removeConversationSnapshot(msg.conversationId);
-  await removeConversationIndexEntry(msg.conversationId);
 
   try {
     await apiClient.deleteConversation(msg.conversationId);
   } catch (e) {
     console.warn('[SW] deleteConversation failed:', e);
     throw e;
-  }
-
-  try {
-    await refreshConversationIndexFromServer();
-  } catch (e) {
-    console.warn('[SW] refresh after delete failed:', e);
   }
 }
