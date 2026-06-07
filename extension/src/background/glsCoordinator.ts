@@ -156,50 +156,34 @@ export function markQueuesDirty(): void {
 
 // ----- small chrome.* promise helpers -----
 
+// 탭을 활성화하고 그 탭이 속한 윈도우도 foreground 로 올린다.
+async function focusTab(tab: chrome.tabs.Tab): Promise<chrome.tabs.Tab> {
+  if (tab.id === undefined) {
+    return tab;
+  }
+  const updated = await chrome.tabs.update(tab.id, { active: true });
+  if (updated.windowId !== undefined) {
+    await chrome.windows.update(updated.windowId, { focused: true }).catch(() => {});
+  }
+  return updated;
+}
+
+// 재사용 가능한 GLS 탭이 있으면 그 탭에 포커스를 주고, 없으면 새 탭을 active 로 연다.
+// 어느 경로든 결과 탭은 항상 foreground 라서 사용자가 진행 상황을 바로 본다.
+// (구 popup 시절엔 새 탭 활성화 시 popup 이 dismiss 되어 background 로 열었으나,
+//  현재는 사이드패널이라 탭이 활성화돼도 닫히지 않는다.)
 async function findOrCreateGlsTab(forceNew = false): Promise<chrome.tabs.Tab> {
   if (!forceNew) {
     const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (activeTab?.id !== undefined) {
-      if (activeTab.url?.startsWith(GLS_URL)) {
-        return activeTab;
-      }
-    }
-
-    const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
     const reusable =
-      existingTabs.find(
-        (tab) => tab.id !== undefined && tab.windowId === activeTab?.windowId,
-      ) ??
-      existingTabs.find((tab) => tab.id !== undefined);
+      (activeTab?.url?.startsWith(GLS_URL) && activeTab.id !== undefined
+        ? activeTab
+        : undefined) ??
+      (await chrome.tabs.query({ url: GLS_URL_MATCH })).find((tab) => tab.id !== undefined);
     if (reusable?.id !== undefined) {
-      return reusable;
+      return focusTab(reusable);
     }
-
-    return chrome.tabs.create({ url: GLS_URL, active: false });
   }
-  // 새 탭은 background 로 (active:false) 열어 popup 이 닫히지 않도록 한다.
-  // popup 은 새 탭이 활성화되면 자동 dismiss 되기 때문. 자동화는 비활성 탭에서도
-  // content script + nexacro 가 정상 동작 (검증 2026-05-13). 사용자가 진행을 보고
-  // 싶으면 수동으로 탭 전환.
-  return chrome.tabs.create({ url: GLS_URL, active: false });
-}
-
-export async function revealOrCreateGlsTab(): Promise<chrome.tabs.Tab> {
-  const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  if (activeTab?.url?.startsWith(GLS_URL) && activeTab.id !== undefined) {
-    return chrome.tabs.update(activeTab.id, { active: true });
-  }
-
-  const existingTabs = await chrome.tabs.query({ url: GLS_URL_MATCH });
-  const reusable = existingTabs.find((tab) => tab.id !== undefined) ?? null;
-  if (reusable?.id !== undefined) {
-    const updated = await chrome.tabs.update(reusable.id, { active: true });
-    if (updated.windowId !== undefined) {
-      await chrome.windows.update(updated.windowId, { focused: true }).catch(() => {});
-    }
-    return updated;
-  }
-
   return chrome.tabs.create({ url: GLS_URL, active: true });
 }
 
