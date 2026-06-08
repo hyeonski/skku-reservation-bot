@@ -49,6 +49,7 @@ export function App() {
   const [view, setView] = useState<View>('sessions');
   const [booting, setBooting] = useState(true);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [homeLoaded, setHomeLoaded] = useState(false);
   const [reminder, setReminder] = useState<ReminderData | null>(null);
   const conv = useConversation();
 
@@ -77,6 +78,7 @@ export function App() {
       refreshSessions().catch((error) => console.warn('[sidepanel] session refresh failed', error)),
       refreshReminder().catch((error) => console.warn('[sidepanel] reminder refresh failed', error)),
     ]);
+    setHomeLoaded(true);
   }, [refreshReminder, refreshSessions]);
 
   const goSessions = useCallback(() => {
@@ -183,7 +185,10 @@ export function App() {
       break;
 
     case 'sessions':
-      screen = (
+      screen = homeLoaded && sessions.length === 0 ? (
+        // 대화 기록이 없으면 목록 대신 시작 화면을 띄운다 (돌아갈 목록이 없어 back 버튼 생략)
+        <ChatStarter onSendStarter={handleStartFromExample} />
+      ) : (
         <SessionList
           sessions={sessions}
           reminder={reminder}

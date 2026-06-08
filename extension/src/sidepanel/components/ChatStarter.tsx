@@ -5,7 +5,7 @@ import { getReservationExamples } from '../utils/reservationExamples';
 
 interface ChatStarterProps {
   onSendStarter: (text: string) => void;
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {

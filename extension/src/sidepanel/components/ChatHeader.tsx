@@ -3,16 +3,18 @@ import { Icon } from '../icons';
 interface ChatHeaderProps {
   title: string;
   sessionLabel?: string;
-  onBack: () => void;
+  onBack?: () => void;
   onNew?: () => void;
 }
 
 export function ChatHeader({ title, sessionLabel, onBack, onNew }: ChatHeaderProps) {
   return (
     <div className="popup-head">
-      <button className="icon-btn" onClick={onBack} title="대화 목록" type="button">
-        <Icon name="menu" />
-      </button>
+      {onBack && (
+        <button className="icon-btn" onClick={onBack} title="대화 목록" type="button">
+          <Icon name="menu" />
+        </button>
+      )}
       <div className="popup-title">
         <div className="glyph">SK</div>
         <span>{title}</span>
