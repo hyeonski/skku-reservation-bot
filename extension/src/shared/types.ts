@@ -34,6 +34,7 @@ export type Intent =
   | 'request_alternative'
   | 'modify_slot'
   | 'modify_application'
+  | 'confirm_reservation'
   | 'cancel'
   | 'out_of_scope';
 

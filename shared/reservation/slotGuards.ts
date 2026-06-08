@@ -17,6 +17,7 @@ import {
   timeToMinutes,
   usesUnsupportedReservationMinute,
 } from './slotPolicy';
+import { mentionsCampus } from './campus';
 
 /** 한 번에 예약 가능한 최대 길이(분). 초과 시 분할 안내. */
 export const MAX_RESERVATION_DURATION_MIN = 8 * 60;
@@ -76,12 +77,9 @@ export function hasContextualBareTimeEdit(
 export const STUDENT_CENTER_CAMPUS_MESSAGE =
   '학생회관은 캠퍼스가 헷갈릴 수 있어요. 명륜 학생회관인지, 율전/자과캠 학생회관인지 알려주세요.';
 
-const STUDENT_CENTER_CAMPUS_PATTERN =
-  /(율전|자과캠|자연과학캠퍼스|자연과학\s*캠퍼스|명륜|인사캠|인문사회과학캠퍼스|인문사회\s*캠퍼스)/;
-
 /** 메시지에 캠퍼스가 명시돼 있는지(학생회관 명확화 억제 조건). */
 export function hasExplicitStudentCenterCampus(text: string): boolean {
-  return STUDENT_CENTER_CAMPUS_PATTERN.test(text);
+  return mentionsCampus(text);
 }
 
 /** "학생회관" 언급 여부. */

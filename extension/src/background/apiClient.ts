@@ -25,6 +25,7 @@ export interface ParseArgs {
   now?: string; // ISO with local offset; default = localOffsetIso()
   clientLastFilledSlots?: FilledSlots | null;
   clientLastApplicationState?: ApplicationState | null;
+  clientLastProposedSpace?: string | null;
 }
 
 export function localOffsetIso(date = new Date()): string {
@@ -138,6 +139,7 @@ export async function parse(args: ParseArgs): Promise<ParseResult> {
     now: args.now ?? localOffsetIso(),
     client_last_filled_slots: args.clientLastFilledSlots ?? null,
     client_last_application_state: args.clientLastApplicationState ?? null,
+    client_last_proposed_space: args.clientLastProposedSpace ?? null,
   };
   return request<ParseResult>('/parse', {
     method: 'POST',

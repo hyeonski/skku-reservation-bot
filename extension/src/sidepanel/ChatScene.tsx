@@ -93,7 +93,6 @@ function adaptSpaceSummary(c: SpaceCandidate): SpaceSummary {
     name: c.roomName,
     building: c.buildingName,
     buildingNo: displayBuildingNo,
-    floor: deriveFloorLabel(c.roomName, c.glsSpaceCode, displayBuildingNo),
     capa: `최대 ${c.capacityMax}명`,
     ...(c.useJojikName ? { useJojikName: c.useJojikName } : {}),
     contents: c.contents,
@@ -107,24 +106,6 @@ function normalizeBuildingNo(buildingNo: string | undefined, code: string): stri
   if (code.startsWith(buildingNo)) return buildingNo;
   const withoutCampusPrefix = buildingNo.length === 3 ? buildingNo.slice(1) : buildingNo;
   return code.startsWith(withoutCampusPrefix) ? withoutCampusPrefix : buildingNo;
-}
-
-function deriveFloorLabel(
-  roomName: string,
-  code: string,
-  buildingNo?: string,
-): string | undefined {
-  const roomMatch = roomName.match(/(\d{3,4})\s*호/);
-  const codeRoomPart =
-    buildingNo && code.startsWith(buildingNo)
-      ? code.slice(buildingNo.length).match(/^(\d{3,4})/)?.[1]
-      : undefined;
-  const raw = roomMatch?.[1] ?? codeRoomPart ?? code.match(/^(\d{3,4})/)?.[1];
-  if (!raw) return undefined;
-  const floor = raw.length >= 4 ? raw.slice(0, 2) : raw.slice(0, 1);
-  const parsed = Number.parseInt(floor, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
-  return `${parsed}층`;
 }
 
 function adaptSlots(slots: import('../shared/types').FilledSlots | null): RecommendationSlots {
@@ -219,7 +200,12 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
     [state.applicationState],
   );
 
+  // 검토(draft) 단계부터는 탐색이 끝난 것으로 보고 공간 탐색 카드를 숨긴다.
+  // submitStep 진행 중에도 automationStatus 는 candidate_found 로 남아 있어 phase 로 판단한다.
+  const searchPhaseEnded =
+    view.phase === 'draft' || view.phase === 'submitting' || view.phase === 'done';
   const showSearchCard =
+    !searchPhaseEnded &&
     state.candidates.length > 0 &&
     (state.automationStatus.kind === 'searching' ||
       state.automationStatus.kind === 'candidate_found' ||
@@ -460,7 +446,7 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
           />
         )}
 
-        {showSearchCard === false && searchSnapshots.length > 0 && (
+        {showSearchCard === false && !searchPhaseEnded && searchSnapshots.length > 0 && (
           <SearchProgressCard
             candidates={searchSnapshots[searchSnapshots.length - 1]!.candidates}
             currentIdx={searchSnapshots[searchSnapshots.length - 1]!.currentIdx}

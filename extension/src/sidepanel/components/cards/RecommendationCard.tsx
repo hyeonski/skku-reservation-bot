@@ -7,9 +7,17 @@ interface RecommendationCardProps {
   onAlternative?: () => void;
 }
 
-function formatLimitTime(limitTimeHHMM?: string | null): string | null {
+// GLS LIMIT_TIME은 마감 시각이 아니라 1회 예약 최대 이용 시간이다.
+// HHMM 형식의 duration: "0800" = 최대 8시간, "0830" = 최대 8시간 30분.
+function formatLimitDuration(limitTimeHHMM?: string | null): string | null {
   if (!limitTimeHHMM || limitTimeHHMM.length !== 4) return null;
-  return `${limitTimeHHMM.slice(0, 2)}:${limitTimeHHMM.slice(2, 4)}`;
+  const hours = parseInt(limitTimeHHMM.slice(0, 2), 10);
+  const minutes = parseInt(limitTimeHHMM.slice(2, 4), 10);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours}시간`);
+  if (minutes > 0) parts.push(`${minutes}분`);
+  return parts.length ? `최대 ${parts.join(' ')}` : null;
 }
 
 export function RecommendationCard({
@@ -17,13 +25,8 @@ export function RecommendationCard({
   slots,
   onAlternative,
 }: RecommendationCardProps) {
-  const limitTime = formatLimitTime(space.limitTimeHHMM);
-  const buildingLabel = space.buildingNo
-    ? `${space.building}(${space.buildingNo}동)`
-    : space.building;
-  const locationLabel = space.floor
-    ? `${buildingLabel} · ${space.floor}`
-    : buildingLabel;
+  const limitDuration = formatLimitDuration(space.limitTimeHHMM);
+  const locationLabel = `${space.building} · ${space.code}`;
 
   return (
     <div className="card">
@@ -37,7 +40,7 @@ export function RecommendationCard({
             <Icon name="building" size={22} />
           </div>
           <div className="info">
-            <div className="name">{space.name}({space.code})</div>
+            <div className="name">{space.name}</div>
             <div className="building">{locationLabel}</div>
             <div className="rec-meta">
               <div className="pair">
@@ -54,10 +57,10 @@ export function RecommendationCard({
                 <span>날짜</span>
                 <span className="v">{slots.date}</span>
               </div>
-              {limitTime && (
+              {limitDuration && (
                 <div className="pair">
-                  <span>운영시간</span>
-                  <span className="v">~{limitTime}</span>
+                  <span>최대 이용시간</span>
+                  <span className="v">{limitDuration}</span>
                 </div>
               )}
             </div>

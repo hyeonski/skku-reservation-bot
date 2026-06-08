@@ -11,6 +11,7 @@
  */
 
 import { useMemo } from 'react';
+import { isResolvableCampus } from '../../../../shared/reservation/campus';
 import type { ChatPhase } from '../types';
 import type { ConversationState } from './useConversation';
 
@@ -28,6 +29,7 @@ const PHASE_LABEL: Record<ChatPhase, string> = {
   starter: '시작',
   'slots-end': '정보 확인',
   'slots-count': '정보 확인',
+  'slots-campus': '정보 확인',
   'awaiting-login': '로그인 대기',
   searching: '탐색 중',
   'awaiting-relogin': '재로그인 대기',
@@ -42,9 +44,10 @@ const PHASE_LABEL: Record<ChatPhase, string> = {
 };
 
 const PHASE_PLACEHOLDER: Record<ChatPhase, string> = {
-  starter: '예: 내일 오후 6시 20명 회의실',
+  starter: '예: 내일 오후 6시 20명 율전 회의실',
   'slots-end': '예: 20시까지 / 2시간',
   'slots-count': '몇 명이서 사용하세요?',
+  'slots-campus': '율전(자연과학) 또는 명륜(인문사회과학)',
   'meta-collect': '단체와 행사명을 알려주세요',
   draft: '수정 사항이나 "제출" 이라고 입력하세요',
   'failed-retry': '조정할 조건을 알려주세요 (인원/시간/날짜)',
@@ -62,6 +65,7 @@ const PHASE_HINTS: Record<ChatPhase, string[]> = {
   starter: [],
   'slots-end': ['20시까지', '2시간', '한 시간만'],
   'slots-count': ['10명', '20명', '30명'],
+  'slots-campus': ['율전', '명륜'],
   'awaiting-login': [],
   searching: [],
   'awaiting-relogin': [],
@@ -139,8 +143,14 @@ function derivePhase(s: ConversationState): ChatPhase {
   ) {
     return 'slots-end';
   }
-  if (missing.has('date') || missing.has('start_time') || missing.size > 0) return 'starter';
-  if (!slots || !slots.date || !slots.start_time) return 'starter';
+  // 날짜·시작시각이 비면 자유 입력(starter)으로 받는다.
+  if (missing.has('date') || missing.has('start_time') || !slots || !slots.date || !slots.start_time) {
+    return 'starter';
+  }
+  // 일정·인원이 모두 찬 뒤 캠퍼스만 남으면 칩(율전/명륜)으로 받는다.
+  if (missing.has('campus') || !isResolvableCampus(slots.campus)) return 'slots-campus';
+  // 그 외 남은 누락은 자유 입력으로.
+  if (missing.size > 0) return 'starter';
 
   // 슬롯이 충분히 찼다 — 이제 신청서 단계.
   const draft = s.applicationState?.draft;

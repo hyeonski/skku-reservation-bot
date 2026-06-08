@@ -31,7 +31,7 @@ export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
           </div>
           <div>
             <h2>무엇을 예약해드릴까요?</h2>
-            <p>날짜·시간·인원을 자연스럽게 알려주세요.</p>
+            <p>날짜·시간·인원·캠퍼스를 자연스럽게 알려주세요.</p>
           </div>
         </div>
         <div className="starter-examples">
@@ -56,7 +56,7 @@ export function ChatStarter({ onSendStarter, onBack }: ChatStarterProps) {
         value={value}
         onChange={setValue}
         onSend={send}
-        placeholder="예: 7월 21일 18시 20명 회의실"
+        placeholder="예: 7월 21일 18시 20명 율전 회의실"
       />
     </div>
   );

@@ -14,8 +14,8 @@ export function getReservationExamples(now = new Date()): string[] {
   const eventDate = formatKoreanDate(addDays(now, 24));
 
   return [
-    `${meetingDate} 오후 6시부터 2시간 20명 학생회 회의`,
-    `${practiceDate} 14시부터 2시간 동아리 연습`,
-    `${eventDate} 오후 3시부터 2시간 50명 학술 세미나`,
+    `${meetingDate} 오후 6시부터 2시간 20명 율전 학생회 회의`,
+    `${practiceDate} 14시부터 2시간 수원 동아리 연습`,
+    `${eventDate} 오후 3시부터 2시간 50명 명륜 학술 세미나`,
   ];
 }

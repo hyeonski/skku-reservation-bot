@@ -24,9 +24,23 @@ import {
   TITLE_SYSTEM_PROMPT,
   renderFewShotBlock,
   renderMemoryContextBlock,
+  renderStateBlock,
+  type ConversationStateSnapshot,
 } from './prompts.js';
 
 const MAX_CONVERSATION_TITLE_LENGTH = 36;
+
+/**
+ * LLM 에 보낼 최근 메시지 수(역할 단위). 전체 history 를 재생하지 않고
+ * 누적 상태(stateSnapshot)+최근 윈도우만 보내, 긴 history 에서 일부 모델이
+ * 공백만 출력하는 quirk 를 피하고 토큰 비용을 줄인다. 누적값은 상태 블록이 단일 진실.
+ */
+const RECENT_HISTORY_WINDOW = 6;
+
+/**
+ * LLM 이 공백/빈 문자열만 반환할 때(일부 모델의 긴 컨텍스트 quirk) 재시도할 횟수.
+ */
+const EMPTY_CONTENT_RETRIES = 2;
 
 /**
  * LLM 에 재사용 후보로 주입하는 최근 완료 예약 1건의 컨텍스트.
@@ -47,6 +61,8 @@ export interface ParseInput {
   history: ChatMessage[];
   now: string;
   memories?: MemoryContext[];
+  /** 지금까지 누적된 슬롯·신청서·진행 상황. 전체 history 대신 이걸 단일 진실로 주입한다. */
+  stateSnapshot?: ConversationStateSnapshot | null;
 }
 
 export interface TitleInput {
@@ -120,38 +136,50 @@ function getClient(): OpenAI {
  * conversation_id 는 호출자(parseRoute)가 책임진다.
  */
 export async function parseWithLLM(input: ParseInput): Promise<LLMParseResult> {
-  const { history, now, memories } = input;
+  const { history, now, memories, stateSnapshot } = input;
 
   const client = getClient();
 
-  // System prompt: 본문 + few-shot + 메모리 후보 + 현재 시각 주입.
+  // System prompt: 본문 + few-shot + 메모리 후보 + 누적 상태 + 현재 시각 주입.
+  // 누적 슬롯·신청서는 stateSnapshot(단일 진실)에서 오고, history 는 최근 윈도우만 보낸다.
   const systemContent = [
     SYSTEM_PROMPT,
     renderFewShotBlock(),
     renderMemoryContextBlock(memories ?? []),
+    renderStateBlock(stateSnapshot),
     `## 현재 시각\n현재 시각: ${now}`,
   ].join('\n\n');
 
-  // OpenAI Chat Completions 메시지로 변환.
+  // 전체 history 를 재생하지 않고 최근 N개 메시지만 보낸다(상태 블록이 누적값을 담당).
+  const recentHistory = history.slice(-RECENT_HISTORY_WINDOW);
   const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
     { role: 'system', content: systemContent },
-    ...history.map((m) => ({ role: m.role, content: m.content })),
+    ...recentHistory.map((m) => ({ role: m.role, content: m.content })),
   ];
 
-  let completion;
-  try {
-    completion = await client.chat.completions.create({
-      model: config.llm.model,
-      messages,
-      response_format: { type: 'json_object' },
-      temperature: 0.2,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`LLM API call failed: ${msg}`);
+  // 일부 모델은 특정 컨텍스트에서 공백만 출력하는 quirk 가 있다(JSON.parse 실패).
+  // 빈/공백 응답이면 제한적으로 재시도한다. 윈도우링으로 빈도는 크게 줄지만 방어선으로 둔다.
+  let raw: string | undefined;
+  for (let attempt = 0; attempt <= EMPTY_CONTENT_RETRIES; attempt += 1) {
+    let completion;
+    try {
+      completion = await client.chat.completions.create({
+        model: config.llm.model,
+        messages,
+        response_format: { type: 'json_object' },
+        temperature: 0.2,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`LLM API call failed: ${msg}`);
+    }
+    const content = completion.choices[0]?.message?.content;
+    if (content && content.trim().length > 0) {
+      raw = content;
+      break;
+    }
   }
 
-  const raw = completion.choices[0]?.message?.content;
   if (!raw) {
     throw new Error('LLM returned empty content');
   }

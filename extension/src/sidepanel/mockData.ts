@@ -106,7 +106,7 @@ export const MOCK_RECOMMENDED_SPACE: SpaceSummary = {
   capa: '최대 25명',
   useJojikName: '소프트웨어융합대학 행정실',
   contents: '학생회·동아리 행사 우선, 수업 시간 중 소음 유의',
-  limitTimeHHMM: '2200',
+  limitTimeHHMM: '0400', // 1회 예약 최대 이용 시간 (HHMM duration) — "0400" = 최대 4시간
 };
 
 export const MOCK_RECOMMENDED_SLOTS: RecommendationSlots = {

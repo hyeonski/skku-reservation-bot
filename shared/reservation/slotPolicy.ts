@@ -1,3 +1,5 @@
+import { isResolvableCampus } from './campus';
+
 export interface ReservationSlots {
   date: string | null;
   start_time: string | null;
@@ -44,7 +46,8 @@ export function isSearchReady(slots: ReservationSlots | null | undefined): boole
     slots.date &&
       slots.start_time &&
       (slots.end_time || slots.duration_min != null) &&
-      slots.headcount != null,
+      slots.headcount != null &&
+      isResolvableCampus(slots.campus),
   );
 }
 

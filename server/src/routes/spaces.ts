@@ -38,11 +38,14 @@ import { getGeneralSmallHeadcountCapacityMax } from '../application/spaceSizing.
 import { ListSpacesQuery, SpaceDto } from '../schemas/space.js';
 
 /**
- * 후보 상한.
- * P1 은 시리얼 후보 순회(사용자에게 하나씩 제시)이므로, 너무 많은 후보를 내려보내도
- * 실제로 소비되지 않는다. 10개면 직렬 제시 시나리오를 충분히 커버.
+ * 후보 상한(= 탐색 풀 크기).
+ * 직렬 후보 순회에서 첫 가용 공간을 만나면 멈추므로, 이 값은 "최대 몇 곳까지
+ * 찔러볼지"를 정한다. 종강 후처럼 대다수 공간이 막혀 있는 시기에는 앞쪽 후보가
+ * 연달아 실패하므로 풀이 얕으면 가용 공간을 못 찾는다.
+ * UI(SearchProgressCard)는 실패한 후보를 접어 항상 일정 개수만 노출하므로,
+ * 풀을 키워도 카드 높이는 커지지 않는다 — 탐색 깊이와 표시 개수를 분리한다.
  */
-const MAX_RESULTS = 10;
+const MAX_RESULTS = 30;
 
 export async function spacesRoute(app: FastifyInstance): Promise<void> {
   const typed = app.withTypeProvider<ZodTypeProvider>();

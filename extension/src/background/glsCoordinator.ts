@@ -19,7 +19,7 @@ import type {
   SpaceCandidate,
   SearchLogEntry,
 } from '../shared/types';
-import { CAMPUS_CODES } from '@gls/nexacroPaths';
+import { resolveCampusCode } from '../../../shared/reservation/campus';
 import type {
   BgCheckBridge,
   BgCheckSession,
@@ -432,24 +432,6 @@ function normalizeSearchSpaceFilter(space: string | null): string | undefined {
   return normalized;
 }
 
-function resolveCampusCode(campus: string | null): string | undefined {
-  const normalized = normalizeCampusKeyword(campus);
-  if (!normalized) return undefined;
-
-  if (/(자연과학|자과|율전)/.test(normalized)) {
-    return CAMPUS_CODES.자연과학캠퍼스;
-  }
-  if (/(인문사회과학|인사|명륜)/.test(normalized)) {
-    return CAMPUS_CODES.인문사회과학캠퍼스;
-  }
-  return undefined;
-}
-
-function normalizeCampusKeyword(campus: string | null): string {
-  return String(campus ?? '')
-    .replace(/\s+/g, '')
-    .trim();
-}
 
 function parseHourFromHHMM(hhmm: string | null): number {
   if (!hhmm) throw new Error('time slot missing');

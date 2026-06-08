@@ -17,6 +17,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isSearchReady } from '../../../../shared/reservation/slotPolicy';
 import type {
   AutomationStatus,
   ApplicationState,
@@ -123,13 +124,9 @@ function freshConversationId(): string {
 }
 
 function hasSearchReadySlots(slots: FilledSlots | null | undefined): boolean {
-  if (!slots) return false;
-  return Boolean(
-    slots.date &&
-      slots.start_time &&
-      (slots.end_time || slots.duration_min != null) &&
-      slots.headcount != null,
-  );
+  // 탐색 준비 판정은 shared/reservation/slotPolicy 단일 출처를 따른다
+  // (campus 해석 가능 여부 포함).
+  return isSearchReady(slots);
 }
 
 function mergeFilledSlots(
@@ -495,6 +492,45 @@ export function useConversation() {
         await sendRuntime(altMsg);
       } catch (e) {
         setState((s) => ({ ...s, lastError: (e as Error).message }));
+      }
+      return;
+    }
+
+    // 신청서가 완성된 상태에서 사용자가 최종 확정("응 예약 신청해줘") → 자동으로
+    // GLS 제출을 트리거한다. "GLS 신청 저장" 버튼 클릭과 동일한 경로(POPUP_CONFIRM_RESERVATION).
+    // LLM 이 confirm_reservation 으로 판정하고, 제안된 공간과 완성된 draft 가 있으며,
+    // 아직 제출 진행/완료 전일 때만 발사한다.
+    const confirmDraft = parsed.application_state.draft;
+    const applicationReadyToSubmit =
+      confirmDraft !== null &&
+      parsed.application_state.needs_application_collection === false &&
+      parsed.application_state.missing_application.length === 0 &&
+      Boolean(
+        confirmDraft.hangsaGbCode &&
+          confirmDraft.organization &&
+          confirmDraft.eventName &&
+          confirmDraft.purpose,
+      );
+    if (
+      parsed.intent === 'confirm_reservation' &&
+      previousState.proposedCandidate !== null &&
+      previousState.submitStep === null &&
+      previousState.automationStatus.kind !== 'done' &&
+      applicationReadyToSubmit &&
+      confirmDraft !== null
+    ) {
+      const confirmMsg: PopupConfirmReservation = {
+        type: 'POPUP_CONFIRM_RESERVATION',
+        conversationId,
+        spaceCode: previousState.proposedCandidate.glsSpaceCode,
+        confirmed: true,
+        formData: confirmDraft,
+      };
+      setState((s) => ({ ...s, submitStep: 'filling' }));
+      try {
+        await sendRuntime(confirmMsg);
+      } catch (e) {
+        setState((s) => ({ ...s, submitStep: null, lastError: (e as Error).message }));
       }
       return;
     }

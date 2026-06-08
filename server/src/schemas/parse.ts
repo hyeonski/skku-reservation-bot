@@ -20,6 +20,8 @@ export const ParseRequest = z.object({
   now: z.string().datetime({ offset: true }),
   client_last_filled_slots: z.lazy(() => FilledSlots).nullable().optional(),
   client_last_application_state: z.lazy(() => ApplicationState).nullable().optional(),
+  // 직전에 가용으로 제안된 공간 라벨(예: "명륜 학생회관 219호"). "다른 곳" 재탐색 맥락에 쓴다.
+  client_last_proposed_space: z.string().nullable().optional(),
 });
 export type ParseRequest = z.infer<typeof ParseRequest>;
 
@@ -40,6 +42,7 @@ export const Intent = z.enum([
   'request_alternative',
   'modify_slot',
   'modify_application',
+  'confirm_reservation',
   'cancel',
   'out_of_scope',
 ]);

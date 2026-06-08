@@ -183,6 +183,11 @@ export async function handleChatRequest(
   }
 
   const requestNow = apiClient.localOffsetIso();
+  const lastProposedSpace = ctx.lastProposed
+    ? [ctx.lastProposed.campusName, ctx.lastProposed.buildingName, ctx.lastProposed.roomName]
+        .filter(Boolean)
+        .join(' ')
+    : null;
   let result: ParseResult;
   try {
     result = await apiClient.parse({
@@ -191,6 +196,7 @@ export async function handleChatRequest(
       now: requestNow,
       clientLastFilledSlots: previousSlots ?? null,
       clientLastApplicationState: ctx.applicationState ?? null,
+      clientLastProposedSpace: lastProposedSpace,
     });
   } catch (error) {
     result = {

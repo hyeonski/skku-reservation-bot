@@ -10,6 +10,7 @@ export type ChatPhase =
   | 'starter'
   | 'slots-end'
   | 'slots-count'
+  | 'slots-campus'
   | 'awaiting-login'
   | 'searching'
   | 'awaiting-relogin'
@@ -67,7 +68,6 @@ export interface SpaceSummary {
   name: string;
   building: string;
   buildingNo?: string;
-  floor?: string;
   capa: string;
   useJojikName?: string;
   contents?: string | null;

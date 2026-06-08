@@ -14,9 +14,11 @@ import type { FastifyInstance } from 'fastify';
 import { ZodTypeProvider } from 'fastify-type-provider-zod';
 import { z } from 'zod';
 import {
+  ApplicationState,
   FilledSlots,
   ParseRequest,
   ParseResponse,
+  type ApplicationState as ApplicationStateType,
   type FilledSlots as FilledSlotsType,
 } from '../schemas/parse.js';
 import {
@@ -47,6 +49,7 @@ import {
   hasExplicitStudentCenterCampus,
   mentionsStudentCenter,
 } from '../../../shared/reservation/slotGuards.js';
+import { isResolvableCampus } from '../../../shared/reservation/campus.js';
 
 const ErrorResponse = z.object({
   error: z.string(),
@@ -55,6 +58,11 @@ const ErrorResponse = z.object({
 
 function parseStoredFilledSlots(value: unknown): FilledSlotsType | null {
   const parsed = FilledSlots.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
+
+function parseStoredApplicationState(value: unknown): ApplicationStateType | null {
+  const parsed = ApplicationState.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
@@ -237,6 +245,30 @@ function applyStudentCenterCampusClarification(
   };
 }
 
+const CAMPUS_CLARIFICATION_MESSAGE =
+  '어느 캠퍼스에서 사용하실 예정인가요? 율전(자연과학)과 명륜(인문사회과학) 중에 알려주세요.';
+
+/**
+ * campus 필수 검증 가드(LLM 결정의 사후 검증, 파이프라인 최후 단계).
+ * campus 가 알려진 캠퍼스(율전/명륜 계열 별칭)로 해석되지 않으면 공간이
+ * 캠퍼스별로 완전히 달라 탐색할 수 없다. 해석 불가면 campus 를 비우고
+ * missing_required 에 넣은 뒤 ready_to_search 를 끈다. LLM 이 탐색 가능하다고
+ * 오판한 경우(ready_to_search=true)에만 안내를 캠퍼스 되묻기로 덮어쓰고,
+ * 이미 다른 항목을 묻고 있으면(ready_to_search=false) 그 문구를 보존한다.
+ */
+function applyRequiredCampusGuard(result: LLMParseResult): LLMParseResult {
+  if (isResolvableCampus(result.filled_slots.campus)) return result;
+  return {
+    ...result,
+    filled_slots: { ...result.filled_slots, campus: null },
+    missing_required: Array.from(new Set([...result.missing_required, 'campus'])),
+    ready_to_search: false,
+    assistant_message: result.ready_to_search
+      ? CAMPUS_CLARIFICATION_MESSAGE
+      : result.assistant_message,
+  };
+}
+
 function extractExplicitSpaceCode(text: string): string | null {
   const matches = text.matchAll(/(^|[^\d])(\d{5,6})(?:\s*호)?(?=$|[^\d])/g);
   for (const match of matches) {
@@ -382,6 +414,21 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       const previousFilledSlots =
         parseStoredFilledSlots(existing?.lastFilledSlots ?? null) ??
         parseStoredFilledSlots(body.client_last_filled_slots ?? null);
+      const previousApplicationState =
+        parseStoredApplicationState(existing?.lastApplicationState ?? null) ??
+        body.client_last_application_state ??
+        null;
+
+      // 누적 상태 스냅샷 — 전체 history 재생 대신 이걸 LLM 에 단일 진실로 주입한다.
+      // (긴 history 에서 일부 모델이 공백만 출력하는 quirk 회피 + 토큰 절감)
+      const stateSnapshot = {
+        slots: previousFilledSlots,
+        draft: previousApplicationState?.draft ?? null,
+        confidence: previousApplicationState?.confidence ?? null,
+        lastProposedSpace: body.client_last_proposed_space ?? null,
+        pendingReuseMemoryId:
+          previousApplicationState?.suggested_memory?.conversationId ?? null,
+      };
 
       // 재사용 후보(최근 완료 예약) + 빈도 통계를 먼저 계산해 LLM context 로 주입한다.
       // 통계는 deterministic, 재사용 제안 여부·문구는 LLM 이 결정한다.
@@ -445,6 +492,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
             history: body.history,
             now: body.now,
             memories: memoryContext,
+            stateSnapshot,
           });
           llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
@@ -465,6 +513,10 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       if (!hasContextualBareTimeEdit(latestUserMessage, previousFilledSlots)) {
         llmResult = applyAmbiguousMeridiemSlotOverride(llmResult, latestUserMessage);
       }
+
+      // campus 필수 검증(최후 가드): 모든 경로의 결과에 대해 campus 해석 가능
+      // 여부를 검증해 탐색 준비 판정을 슬롯 정책과 일치시킨다.
+      llmResult = applyRequiredCampusGuard(llmResult);
 
       // 신청서 상태는 LLM 의 application 출력을 정규화해 조립한다(추출/분류/메시지 재작성 없음).
       // 길이 초과 같은 하드 검증에서만 LLM 메시지를 덮어쓴다.
