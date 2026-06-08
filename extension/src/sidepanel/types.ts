@@ -35,7 +35,7 @@ export interface SessionSummary {
   preview: string;
   when?: string;
   updatedAt?: string;
-  status: 'active' | 'completed' | 'abandoned' | 'abandoned_user' | 'abandoned_timeout';
+  status: 'active' | 'completed' | 'abandoned' | 'abandoned_user';
 }
 
 export interface ReminderData {

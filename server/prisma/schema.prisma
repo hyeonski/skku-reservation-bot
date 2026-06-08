@@ -33,7 +33,6 @@ enum ConversationStatus {
   active
   completed
   abandoned_user
-  abandoned_timeout
 }
 
 enum ReminderStatus {

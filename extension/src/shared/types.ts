@@ -10,8 +10,7 @@ export type ApplicationDraftSource = 'conversation' | 'memory' | 'user_modified'
 export type ConversationStatus =
   | 'active'
   | 'completed'
-  | 'abandoned_user'
-  | 'abandoned_timeout';
+  | 'abandoned_user';
 
 export interface ChatMessage {
   role: ChatRole;

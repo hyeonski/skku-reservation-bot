@@ -9,7 +9,6 @@ export const ConversationStatus = z.enum([
   'active',
   'completed',
   'abandoned_user',
-  'abandoned_timeout',
 ]);
 export type ConversationStatus = z.infer<typeof ConversationStatus>;
 
