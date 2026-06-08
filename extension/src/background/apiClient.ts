@@ -90,7 +90,6 @@ export interface ListSpacesArgs {
   buildingNo?: string;
   building?: string;
   space?: string;
-  userOrgCode?: string;
   date?: string;
   startTime?: string;
 }
@@ -203,7 +202,6 @@ export async function listSpaces(args: ListSpacesArgs): Promise<SpaceCandidate[]
   if (args.buildingNo) params.set('buildingNo', args.buildingNo);
   if (args.building) params.set('building', args.building);
   if (args.space) params.set('space', args.space);
-  if (args.userOrgCode) params.set('userOrgCode', args.userOrgCode);
   if (args.date) params.set('date', args.date);
   if (args.startTime) params.set('startTime', args.startTime);
   return request<SpaceCandidate[]>(`/spaces?${params.toString()}`, { method: 'GET' });

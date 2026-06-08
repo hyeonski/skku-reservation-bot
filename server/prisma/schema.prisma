@@ -21,6 +21,8 @@ model Client {
   conversations Conversation[]
   reminders     Reminder[]
   spaceFeedbackEvents SpaceFeedbackEvent[]
+  reservationRecords  ReservationRecord[]
+  patternMutes        PatternMute[]
 
   @@map("client")
 }
@@ -38,6 +40,7 @@ enum ReminderStatus {
   active
   dismissed
   accepted
+  expired
 }
 
 enum SpaceFeedbackEventType {
@@ -97,10 +100,57 @@ model Reminder {
   updatedAt   DateTime  @updatedAt @map("updated_at")
   dismissedAt DateTime? @map("dismissed_at")
   acceptedAt  DateTime? @map("accepted_at")
+  expiredAt   DateTime? @map("expired_at")
 
   @@unique([clientId, patternKey, proposedDate])
   @@index([clientId, status, proposedDate])
   @@map("reminder")
+}
+
+// ---------- 패턴 음소거 (연속 거절 시 그 패턴 제안 억제) ----------
+// clearedAt = null 이면 음소거 활성. accept 또는 음소거 이후 재완료 시 clearedAt 세팅.
+
+model PatternMute {
+  id         String    @id @default(uuid()) @db.Char(36)
+  clientId   String    @map("client_id") @db.Char(36)
+  client     Client    @relation(fields: [clientId], references: [id])
+  patternKey String    @map("pattern_key") @db.VarChar(191)
+  mutedAt    DateTime  @default(now()) @map("muted_at")
+  clearedAt  DateTime? @map("cleared_at")
+
+  @@index([clientId, patternKey, clearedAt])
+  @@map("pattern_mute")
+}
+
+// ---------- 예약 완료 이력 (reminder 패턴 감지의 단일 데이터원) ----------
+// 예약 제출 완료 시점에 신청서·슬롯 정보를 평면 1행으로 append 한다.
+// Conversation(대화 transcript)에서 예약 사실을 추출하던 방식을 대체한다.
+
+model ReservationRecord {
+  id             String @id @default(uuid()) @db.Char(36)
+  clientId       String @map("client_id") @db.Char(36)
+  client         Client @relation(fields: [clientId], references: [id])
+  conversationId String @unique @map("conversation_id") @db.Char(36) // 대화당 1예약 = 멱등 키
+
+  date      String @db.VarChar(10) // YYYY-MM-DD
+  weekday   Int // 0~6, date에서 파생 저장(패턴 그룹핑용)
+  startTime String @map("start_time") @db.VarChar(5)
+  endTime   String @map("end_time") @db.VarChar(5)
+  headcount Int
+
+  organization String @db.VarChar(191)
+  eventName    String @map("event_name") @db.VarChar(191)
+  purpose      String @db.Text
+  hangsaGbCode String @map("hangsa_gb_code") @db.VarChar(8)
+
+  spaceCode  String? @map("space_code") @db.VarChar(40)
+  spaceLabel String? @map("space_label") @db.VarChar(191)
+
+  reservedAt DateTime @map("reserved_at") // 예약 완료 시각
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([clientId, reservedAt])
+  @@map("reservation_record")
 }
 
 // ---------- 공간 선호/비선호 이벤트 ----------

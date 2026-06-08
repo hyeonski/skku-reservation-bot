@@ -161,6 +161,5 @@ export interface SpaceCandidate {
   useJojikName: string | null;
   contents: string | null;
   limitTimeHHMM: string | null;
-  isUserOrgPreferred: boolean;
   personalizationReason?: string | null;
 }

@@ -1,7 +1,7 @@
 /**
  * GET /spaces — 인원 기반 후보 공간 조회 (D-022, D-024).
  *
- * 쿼리: ListSpacesQuery (headcount 필수, campus/building/userOrg 선택)
+ * 쿼리: ListSpacesQuery (headcount 필수, campus/building 선택)
  * 응답: SpaceDto[]
  *
  * 필터:
@@ -12,9 +12,16 @@
  * - space가 GLS 공간코드 형태이면 glsSpaceCode exact 매칭
  *
  * 정렬:
- * - userOrgCode가 주어지면 useJojikCode 일치 항목 우선 (isUserOrgPreferred=true 먼저)
  * - 완료 예약 이력 기반 개인화 점수 내림차순
  * - 그 다음 capacityMax 오름차순 (인원에 가까운 공간 우선 — 공간 효율, D-013)
+ *
+ * [보류된 기능: 사용자 소속(학과) 기반 우선 정렬]
+ * Space.useJojikCode/useJojikName(그 공간을 우선 사용할 수 있는 학과/행정실)은
+ * GLS에서 긁어와 DB에 남아 있다. 한때 요청의 userOrgCode와 useJojikCode를 비교해
+ * 본인 학과 전용 공간을 맨 앞으로 올리는 isUserOrgPreferred 정렬이 있었으나,
+ * 클라이언트가 userOrgCode를 실제로 채워 보낸 적이 없어(항상 비활성) 제거했다.
+ * 되살리려면: ① 사용자 소속 코드 확보(GLS 로그인 정보/온보딩 입력/신청서 추론) →
+ * ② ListSpacesQuery.userOrgCode 재도입 → ③ useJojikCode 일치 항목 우선 정렬.
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -57,7 +64,6 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
         buildingNo,
         building,
         space,
-        userOrgCode,
         date,
         startTime,
       } = req.query;
@@ -105,37 +111,22 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
         useJojikName: row.useJojikName,
         contents: row.contents,
         limitTimeHHMM: row.limitTimeHHMM,
-        isUserOrgPreferred:
-          userOrgCode != null && row.useJojikCode === userOrgCode,
         personalizationReason: null,
       }));
 
-      if (userOrgCode) {
-        // 안정 정렬: isUserOrgPreferred=true 를 앞으로. capacityMax 순서는 보존.
-        dtos.sort((a, b) => {
-          if (a.isUserOrgPreferred === b.isUserOrgPreferred) return 0;
-          return a.isUserOrgPreferred ? -1 : 1;
-        });
-      }
-
-      const completedRows = await app.prisma.conversation.findMany({
+      // 완료 예약 이력은 ReservationRecord(정제된 평면 행)에서 직접 읽는다.
+      // reminder 패턴 감지와 동일한 단일 데이터원 — Conversation JSON 파싱 불필요.
+      const completedRows = await app.prisma.reservationRecord.findMany({
         where: {
           clientId: req.clientId,
-          status: 'completed',
-          deletedAt: null,
-          confirmedSpaceCode: { not: null },
+          spaceCode: { not: null },
         },
-        orderBy: [
-          { completedAt: 'desc' },
-          { updatedAt: 'desc' },
-        ],
+        orderBy: { reservedAt: 'desc' },
         take: RECENT_COMPLETED_CONVERSATION_LIMIT,
         select: {
-          confirmedSpaceCode: true,
-          confirmedSpaceLabel: true,
-          lastFilledSlots: true,
-          completedAt: true,
-          updatedAt: true,
+          spaceCode: true,
+          date: true,
+          startTime: true,
         },
       });
       const feedbackCutoff = new Date(
@@ -160,7 +151,7 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
       const confirmedSpaceCodes = [
         ...new Set(
           completedRows
-            .map((row) => row.confirmedSpaceCode)
+            .map((row) => row.spaceCode)
             .filter((code): code is string => code != null && code.trim().length > 0),
         ),
       ];
@@ -181,16 +172,14 @@ export async function spacesRoute(app: FastifyInstance): Promise<void> {
       const personalized = sortSpacesByPersonalizedHistory(
         dtos,
         completedRows.flatMap((row) => {
-          if (!row.confirmedSpaceCode) return [];
-          const confirmedSpace = confirmedSpaceByCode.get(row.confirmedSpaceCode);
+          if (!row.spaceCode) return [];
+          const confirmedSpace = confirmedSpaceByCode.get(row.spaceCode);
           return [{
-            confirmedSpaceCode: row.confirmedSpaceCode,
-            confirmedSpaceLabel: row.confirmedSpaceLabel,
+            confirmedSpaceCode: row.spaceCode,
             confirmedBuildingNo: confirmedSpace?.buildingNo ?? null,
             confirmedBuildingName: confirmedSpace?.buildingName ?? null,
-            lastFilledSlots: row.lastFilledSlots,
-            completedAt: row.completedAt,
-            updatedAt: row.updatedAt,
+            date: row.date,
+            startTime: row.startTime,
           }];
         }),
         softRejectRows,

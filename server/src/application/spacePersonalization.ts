@@ -1,4 +1,3 @@
-import { FilledSlots } from '../schemas/parse.js';
 import type { SpaceDto } from '../schemas/space.js';
 
 export const RECENT_COMPLETED_CONVERSATION_LIMIT = 40;
@@ -16,14 +15,14 @@ export const SPACE_PERSONALIZATION_WEIGHTS = {
 
 export type TimeBucket = 'morning' | 'lunch' | 'afternoon' | 'evening' | 'night';
 
+// 완료 예약 이력 1건. ReservationRecord 행에서 직접 매핑한다.
+// (이전엔 Conversation의 lastFilledSlots JSON을 파싱했으나, 이제 정제된 값을 직접 받는다.)
 export interface CompletedSpaceHistoryEntry {
   confirmedSpaceCode: string;
-  confirmedSpaceLabel: string | null;
   confirmedBuildingNo: string | null;
   confirmedBuildingName: string | null;
-  lastFilledSlots: unknown;
-  completedAt: Date | null;
-  updatedAt: Date;
+  date: string | null;
+  startTime: string | null;
 }
 
 export interface SoftRejectedSpaceEvent {
@@ -88,12 +87,6 @@ export function getSlotKey(date: string | null | undefined, startTime: string | 
   const weekday = getWeekdayKey(date);
   if (weekday == null) return null;
   return `${weekday}:${getTimeBucket(startTime)}`;
-}
-
-function parseHistorySlotKey(lastFilledSlots: unknown): string | null {
-  const parsed = FilledSlots.safeParse(lastFilledSlots);
-  if (!parsed.success) return null;
-  return getSlotKey(parsed.data.date, parsed.data.start_time);
 }
 
 function normalizeBuildingName(value: string | null | undefined): string | null {
@@ -201,7 +194,7 @@ export function sortSpacesByPersonalizedHistory<T extends SpaceDto>(
       confirmedSpaceCode: entry.confirmedSpaceCode,
       confirmedBuildingNo: entry.confirmedBuildingNo,
       confirmedBuildingName: entry.confirmedBuildingName,
-      slotKey: parseHistorySlotKey(entry.lastFilledSlots),
+      slotKey: getSlotKey(entry.date, entry.startTime),
       recencyRank: index,
     }));
   const softRejects = softRejectEntries
@@ -226,9 +219,6 @@ export function sortSpacesByPersonalizedHistory<T extends SpaceDto>(
   });
 
   scored.sort((a, b) => {
-    if (a.space.isUserOrgPreferred !== b.space.isUserOrgPreferred) {
-      return a.space.isUserOrgPreferred ? -1 : 1;
-    }
     if (a.score !== b.score) return b.score - a.score;
     return a.baseIndex - b.baseIndex;
   });

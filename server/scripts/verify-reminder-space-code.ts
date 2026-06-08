@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-import { buildReminderCandidate, type ReminderPatternInput } from '../src/application/reminders.js';
+import { buildReminderCandidate, type ReservationPatternInput } from '../src/application/reminders.js';
 
 process.env.LLM_API_KEY ??= 'verify-only';
 process.env.DATABASE_URL ??= 'mysql://user:password@localhost:3306/verify';
@@ -8,32 +8,22 @@ process.env.DATABASE_URL ??= 'mysql://user:password@localhost:3306/verify';
 const { __parseRouteTestables } = await import('../src/routes/parse.js');
 
 function input(
-  id: string,
+  _id: string,
   date: string,
-  confirmedSpaceLabel: string | null,
-  confirmedSpaceCode: string | null,
-): ReminderPatternInput {
+  spaceLabel: string | null,
+  spaceCode: string | null,
+): ReservationPatternInput {
   return {
-    id,
-    confirmedSpaceLabel,
-    confirmedSpaceCode,
-    slots: {
-      date,
-      start_time: '18:00',
-      end_time: '20:00',
-      duration_min: 120,
-      headcount: 20,
-      campus: null,
-      building: null,
-      space: null,
-    },
-    formData: {
-      hangsaGbCode: '113',
-      organization: 'SW학생회',
-      eventName: '운영회의',
-      headcount: 20,
-      purpose: '회의',
-    },
+    date,
+    startTime: '18:00',
+    endTime: '20:00',
+    headcount: 20,
+    organization: 'SW학생회',
+    eventName: '운영회의',
+    purpose: '회의',
+    hangsaGbCode: '113',
+    spaceLabel,
+    spaceCode,
   };
 }
 

@@ -23,11 +23,13 @@ import type {
   ChatMessage,
   FilledSlots as ParsedFilledSlots,
 } from '../schemas/parse.js';
+import { FilledSlots } from '../schemas/parse.js';
 import {
   parseStoredApplicationState,
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
+import { weekdayOf } from '../application/reminders.js';
 import { summarizeConversationTitle } from '../llm/client.js';
 
 const IdParam = z.object({
@@ -251,6 +253,46 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
       update: updateData,
       create: createData,
     });
+
+    // 예약 완료 최초 전이 시 ReservationRecord 1행 append.
+    // reminder 패턴 감지의 단일 데이터원 — 신청서·슬롯을 정제된 평면 행으로 분리 저장한다.
+    // 멱등: conversationId @unique + existing.status 가드 + P2002 무시. 실패해도 완료 응답은 막지 않는다.
+    if (isCompleted && existing?.status !== 'completed' && body.confirmedReservationForm) {
+      const slots = FilledSlots.safeParse(body.lastFilledSlots);
+      const form = body.confirmedReservationForm;
+      if (slots.success && slots.data.date && slots.data.start_time && slots.data.end_time) {
+        const headcount = slots.data.headcount ?? form.headcount;
+        const weekday = weekdayOf(slots.data.date);
+        if (headcount && weekday != null) {
+          try {
+            await app.prisma.reservationRecord.create({
+              data: {
+                client: { connect: { id: req.clientId } },
+                conversationId: id,
+                date: slots.data.date,
+                weekday,
+                startTime: slots.data.start_time,
+                endTime: slots.data.end_time,
+                headcount,
+                organization: form.organization,
+                eventName: form.eventName,
+                purpose: form.purpose,
+                hangsaGbCode: form.hangsaGbCode,
+                spaceCode: body.confirmedSpaceCode ?? null,
+                spaceLabel: body.confirmedSpaceLabel ?? null,
+                reservedAt: now,
+              },
+            });
+          } catch (err) {
+            const isDuplicate =
+              err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002';
+            if (!isDuplicate) {
+              req.log.warn({ err }, 'reservation record append failed during completion');
+            }
+          }
+        }
+      }
+    }
 
     return reply.code(existing ? 200 : 201).send(toDto(row));
   });

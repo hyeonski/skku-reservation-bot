@@ -14,7 +14,6 @@ function space(
   glsSpaceCode: string,
   capacityMax: number,
   buildingNo: string,
-  isUserOrgPreferred = false,
 ): SpaceDto {
   return {
     glsSpaceCode,
@@ -28,7 +27,6 @@ function space(
     useJojikName: null,
     contents: null,
     limitTimeHHMM: null,
-    isUserOrgPreferred,
     personalizationReason: null,
   };
 }
@@ -40,23 +38,14 @@ function history(
   buildingNo: string,
   recencyRank: number,
 ): CompletedSpaceHistoryEntry {
+  // recencyRank는 호출부에서 입력 순서로 표현됨(배열 인덱스 = 최근성). 시그니처 호환을 위해 유지.
+  void recencyRank;
   return {
     confirmedSpaceCode,
-    confirmedSpaceLabel: null,
     confirmedBuildingNo: buildingNo,
     confirmedBuildingName: `building-${buildingNo}`,
-    lastFilledSlots: {
-      date,
-      start_time: startTime,
-      end_time: '11:00',
-      duration_min: 60,
-      headcount: 4,
-      campus: null,
-      building: null,
-      space: null,
-    },
-    completedAt: new Date(Date.UTC(2026, 5, 3, 0, 0, recencyRank)),
-    updatedAt: new Date(Date.UTC(2026, 5, 3, 0, 0, recencyRank)),
+    date,
+    startTime,
   };
 }
 
@@ -222,23 +211,6 @@ assert.equal(
 
 assert.deepEqual(
   sortSpacesByPersonalizedHistory(
-    [
-      space('A', 10, '101', true),
-      space('B', 20, '102', false),
-    ],
-    [
-      history('B', '2026-06-01', '09:00', '102', 0),
-      history('B', '2026-06-08', '09:00', '102', 1),
-    ],
-    [],
-    { date: '2026-06-15', startTime: '09:00' },
-  ).map((item) => item.glsSpaceCode),
-  ['A', 'B'],
-  'user organization priority remains the primary ordering group',
-);
-
-assert.deepEqual(
-  sortSpacesByPersonalizedHistory(
     baseSpaces,
     [
       history('C', '2026-06-01', '09:00', '103', 0),
@@ -292,20 +264,6 @@ assert.deepEqual(
   ).map((item) => item.glsSpaceCode),
   ['C', 'A', 'B'],
   'one soft reject does not overwhelm a strong completed-reservation preference',
-);
-
-assert.deepEqual(
-  sortSpacesByPersonalizedHistory(
-    [
-      space('A', 10, '101', true),
-      space('B', 20, '102', false),
-    ],
-    [],
-    [rejected('A', '2026-06-01', '09:00')],
-    { date: '2026-06-08', startTime: '09:00' },
-  ).map((item) => item.glsSpaceCode),
-  ['A', 'B'],
-  'user organization priority remains first even with a soft reject',
 );
 
 // --- time bucket boundary edges (UC-142 시간대 버킷 정확도의 토대) ---

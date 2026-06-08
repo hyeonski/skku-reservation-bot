@@ -1,15 +1,25 @@
-import type { FilledSlots, ReservationFormData } from '../schemas/parse.js';
-
 export const REMINDER_PATTERN_THRESHOLD = 3;
+
+/** 같은 패턴을 연속 이 횟수만큼 거절하면 그 패턴을 음소거한다. */
+export const MUTE_THRESHOLD = 3;
 
 const WEEKDAYS_KO = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
 
-export interface ReminderPatternInput {
-  id: string;
-  slots: FilledSlots | null;
-  formData: ReservationFormData | null;
-  confirmedSpaceLabel?: string | null;
-  confirmedSpaceCode?: string | null;
+/**
+ * 패턴 감지 입력. ReservationRecord 테이블의 평면 행을 그대로 받는다.
+ * (이전엔 Conversation의 JSON slots/formData를 파싱했으나, 이제 정제된 행을 직접 사용한다.)
+ */
+export interface ReservationPatternInput {
+  date: string;
+  startTime: string;
+  endTime: string;
+  headcount: number;
+  organization: string;
+  eventName: string;
+  purpose: string;
+  hangsaGbCode: string;
+  spaceLabel?: string | null;
+  spaceCode?: string | null;
 }
 
 export interface ReminderCandidate {
@@ -28,7 +38,6 @@ export interface ReminderCandidate {
 }
 
 interface GroupEntry {
-  source: ReminderPatternInput;
   date: string;
   weekday: number;
   startTime: string;
@@ -62,7 +71,7 @@ function toUtcMs(date: string): number {
   return Date.UTC(parsed.y, parsed.m - 1, parsed.d);
 }
 
-function weekdayOf(date: string): number | null {
+export function weekdayOf(date: string): number | null {
   const ms = toUtcMs(date);
   if (!Number.isFinite(ms)) return null;
   return new Date(ms).getUTCDay();
@@ -82,14 +91,28 @@ function nextWeeklyDateAfter(lastDate: string, todayIso: string): string {
   return proposed;
 }
 
-function groupKeyOf(entry: GroupEntry): string {
+/**
+ * 패턴 식별 키 = 요일 | 시작 | 종료 | 주관단체(소문자) | 행사명(소문자).
+ * Reminder.patternKey 및 PatternMute.patternKey 와 동일 포맷 — 음소거 매칭에 재사용.
+ */
+export function patternKeyOf(input: {
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  organization: string;
+  eventName: string;
+}): string {
   return [
-    entry.weekday,
-    entry.startTime,
-    entry.endTime,
-    entry.organization.toLowerCase(),
-    entry.eventName.toLowerCase(),
+    input.weekday,
+    input.startTime,
+    input.endTime,
+    input.organization.toLowerCase(),
+    input.eventName.toLowerCase(),
   ].join('|');
+}
+
+function groupKeyOf(entry: GroupEntry): string {
+  return patternKeyOf(entry);
 }
 
 function hangsaLabelOf(code: string): string | null {
@@ -106,36 +129,31 @@ function hangsaLabelOf(code: string): string | null {
   return labels[code] ?? null;
 }
 
-function toEntry(source: ReminderPatternInput): GroupEntry | null {
-  const slots = source.slots;
-  const formData = source.formData;
-  if (!slots || !formData) return null;
-  if (!slots.date || !slots.start_time || !slots.end_time) return null;
+function toEntry(input: ReservationPatternInput): GroupEntry | null {
+  if (!input.date || !input.startTime || !input.endTime) return null;
 
-  const weekday = weekdayOf(slots.date);
+  const weekday = weekdayOf(input.date);
   if (weekday == null) return null;
 
-  const organization = normalizeWhitespace(formData.organization);
-  const eventName = normalizeWhitespace(formData.eventName);
-  const purpose = normalizeWhitespace(formData.purpose);
+  const organization = normalizeWhitespace(input.organization);
+  const eventName = normalizeWhitespace(input.eventName);
+  const purpose = normalizeWhitespace(input.purpose);
   if (!organization || !eventName) return null;
 
-  const headcount = slots.headcount ?? formData.headcount;
-  if (!headcount || headcount <= 0) return null;
+  if (!input.headcount || input.headcount <= 0) return null;
 
   return {
-    source,
-    date: slots.date,
+    date: input.date,
     weekday,
-    startTime: slots.start_time,
-    endTime: slots.end_time,
-    headcount,
-    hangsaGbCode: normalizeWhitespace(formData.hangsaGbCode),
+    startTime: input.startTime,
+    endTime: input.endTime,
+    headcount: input.headcount,
+    hangsaGbCode: normalizeWhitespace(input.hangsaGbCode),
     organization,
     eventName,
     purpose,
-    spaceLabel: normalizeWhitespace(source.confirmedSpaceLabel ?? '') || null,
-    spaceCode: normalizeWhitespace(source.confirmedSpaceCode ?? '') || null,
+    spaceLabel: normalizeWhitespace(input.spaceLabel ?? '') || null,
+    spaceCode: normalizeWhitespace(input.spaceCode ?? '') || null,
   };
 }
 
@@ -151,7 +169,7 @@ export function todayKstIso(now = new Date()): string {
 }
 
 export function buildReminderCandidate(
-  inputs: ReminderPatternInput[],
+  inputs: ReservationPatternInput[],
   todayIso = todayKstIso(),
 ): ReminderCandidate | null {
   const groups = new Map<string, GroupEntry[]>();

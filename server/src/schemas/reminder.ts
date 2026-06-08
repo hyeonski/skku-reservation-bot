@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const ReminderStatus = z.enum(['active', 'dismissed', 'accepted']);
+export const ReminderStatus = z.enum(['active', 'dismissed', 'accepted', 'expired']);
 export type ReminderStatus = z.infer<typeof ReminderStatus>;
 
 export const ReminderDto = z.object({
