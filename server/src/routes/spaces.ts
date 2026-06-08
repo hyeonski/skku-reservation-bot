@@ -40,9 +40,9 @@ import { ListSpacesQuery, SpaceDto } from '../schemas/space.js';
 /**
  * 후보 상한.
  * P1 은 시리얼 후보 순회(사용자에게 하나씩 제시)이므로, 너무 많은 후보를 내려보내도
- * 실제로 소비되지 않는다. 50개면 캠퍼스·건물 미지정 케이스의 worst case 도 충분히 커버.
+ * 실제로 소비되지 않는다. 10개면 직렬 제시 시나리오를 충분히 커버.
  */
-const MAX_RESULTS = 50;
+const MAX_RESULTS = 10;
 
 export async function spacesRoute(app: FastifyInstance): Promise<void> {
   const typed = app.withTypeProvider<ZodTypeProvider>();
