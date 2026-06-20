@@ -11,6 +11,7 @@
     "prisma:migrate": "prisma migrate dev",
     "scrape:spaces": "tsx --env-file=.env scripts/scrape-spaces.ts",
     "seed:e2e-spaces": "tsx --env-file=.env scripts/seed-e2e-spaces.ts",
+    "seed:demo-history": "tsx --env-file=.env scripts/seed-demo-history.ts",
     "verify:spaces": "tsx scripts/verify-space-personalization.ts",
     "verify:reminders": "tsx scripts/verify-reminder-space-code.ts",
     "verify:feedback": "tsx scripts/verify-space-feedback-route.ts",
