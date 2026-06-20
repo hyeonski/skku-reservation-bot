@@ -9,7 +9,6 @@ import type {
   SpaceCandidate,
   ChatMessage,
   FilledSlots,
-  Intent,
   ApplicationState,
   ReservationFormData,
   ConversationStatus,
@@ -46,7 +45,6 @@ export interface ConversationDto {
   status: ConversationStatus;
   title: string | null;
   history: ChatMessage[];
-  lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
   lastApplicationState: ApplicationState | null;
   confirmedReservationForm: ReservationFormData | null;
@@ -76,7 +74,6 @@ export interface UpsertConversationBody {
   history: ChatMessage[];
   status?: ConversationStatus;
   title?: string | null;
-  lastIntent?: Intent | null;
   lastFilledSlots?: FilledSlots | null;
   lastApplicationState?: ApplicationState | null;
   confirmedReservationForm?: ReservationFormData | null;

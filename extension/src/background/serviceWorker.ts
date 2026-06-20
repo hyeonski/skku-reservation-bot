@@ -28,10 +28,6 @@ import {
   resumeAfterLoginComplete,
 } from './handlers/reservationHandlers';
 import {
-  handleApplySuggestedMemory,
-  handleDismissSuggestedMemory,
-} from './handlers/memoryHandlers';
-import {
   handleAcceptReminder,
   handleDismissReminder,
   handleGetReminder,
@@ -110,18 +106,6 @@ chrome.runtime.onMessage.addListener((rawMsg, sender, sendResponse) => {
     case 'POPUP_CONFIRM_RESERVATION':
       handleConfirm(msg)
         .then(() => sendResponse({ ok: true }))
-        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
-      return true;
-
-    case 'POPUP_APPLY_SUGGESTED_MEMORY':
-      handleApplySuggestedMemory(msg)
-        .then((response) => sendResponse(response))
-        .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
-      return true;
-
-    case 'POPUP_DISMISS_SUGGESTED_MEMORY':
-      handleDismissSuggestedMemory(msg)
-        .then((response) => sendResponse(response))
         .catch((e) => sendResponse({ ok: false, error: (e as Error).message }));
       return true;
 

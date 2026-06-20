@@ -16,7 +16,7 @@ import { config } from '../config.js';
 import {
   ConfidenceLevel,
   FilledSlots,
-  Intent,
+  Signal,
   type ChatMessage,
 } from '../schemas/parse.js';
 import {
@@ -98,20 +98,18 @@ const LLMApplication = z.object({
 export type LLMApplication = z.infer<typeof LLMApplication>;
 
 /**
- * LLM 이 돌려주는 JSON 스키마 — conversation_id 를 제외한 ParseResponse.
- * application 은 모델이 누락해도 502 로 죽지 않도록 관대하게(.optional) 받는다.
- * 누락 시 다운스트림(normalizeApplicationFromLLM)이 draft 없음으로 처리한다.
+ * LLM 이 돌려주는 JSON 스키마. LLM 은 값(slots/application) + 흐름-제어 화행(signal)만 낸다.
+ * missing_required·ready_to_search 는 서버가 slots 에서 파생하고, intent 는 signal 에서 파생한다
+ * (단일 책임: LLM=해석, 서버=정합성). application 은 모델 누락 대비 관대하게(.optional) 받는다.
  */
 const LLMOutput = z.object({
   filled_slots: FilledSlots,
-  missing_required: z.array(z.string()),
-  intent: Intent,
-  ready_to_search: z.boolean(),
+  signal: Signal,
   assistant_message: z.string(),
   application: LLMApplication.nullable().optional(),
 });
 
-export type LLMParseResult = z.infer<typeof LLMOutput>;
+export type LLMRawResult = z.infer<typeof LLMOutput>;
 
 const TitleOutput = z.object({
   title: z.string(),
@@ -135,7 +133,7 @@ function getClient(): OpenAI {
  * history(클라 권위) + now 를 받아 LLM 으로 슬롯 추출.
  * conversation_id 는 호출자(parseRoute)가 책임진다.
  */
-export async function parseWithLLM(input: ParseInput): Promise<LLMParseResult> {
+export async function parseWithLLM(input: ParseInput): Promise<LLMRawResult> {
   const { history, now, memories, stateSnapshot } = input;
 
   const client = getClient();

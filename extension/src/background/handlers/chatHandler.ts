@@ -63,9 +63,10 @@ async function applyCapacityPreflight(result: ParseResult): Promise<ParseResult>
 
   return {
     ...result,
-    intent: 'new_reservation',
+    signal: 'out_of_scope',
     ready_to_search: false,
     missing_required: [],
+    action: 'none',
     assistant_message: `${headcount}명을 수용할 수 있는 공간이 등록되어 있지 않아요. 인원을 줄이거나 행사를 나눠서 다시 알려주세요.`,
   };
 }
@@ -95,10 +96,12 @@ export async function handleChatRequest(
       conversation_id: msg.conversationId,
       filled_slots: emptyFilledSlots(),
       missing_required: [],
-      intent: 'cancel',
       ready_to_search: false,
       assistant_message: '예약 진행을 중단했어요. 필요하면 새 대화로 다시 시작할 수 있어요.',
       application_state: applicationState,
+      signal: 'cancel',
+      action: 'none',
+      can_submit: false,
     };
 
     ctx.pendingStart = null;
@@ -109,7 +112,6 @@ export async function handleChatRequest(
     ctx.confirmedSpaceCode = null;
     ctx.confirmedSpaceLabel = null;
     ctx.updatedAt = new Date().toISOString();
-    ctx.lastIntent = 'cancel';
     ctx.lastFilledSlots = result.filled_slots;
     ctx.applicationState = applicationState;
     syncApplicationDraftToAutomation(ctx, applicationState.draft);
@@ -126,7 +128,6 @@ export async function handleChatRequest(
       {
         history: historyWithAssistant,
         status: 'abandoned_user',
-        lastIntent: result.intent,
         lastFilledSlots: result.filled_slots,
         lastApplicationState: result.application_state,
         confirmedReservationLabel: null,
@@ -144,16 +145,17 @@ export async function handleChatRequest(
       conversation_id: msg.conversationId,
       filled_slots: previousSlots ?? emptyFilledSlots(),
       missing_required: [],
-      intent: 'request_alternative',
       ready_to_search: false,
       assistant_message: asksForCandidateList(msg.latestMessage)
         ? '후보를 길게 나열하지 않고 한 곳씩 보여드려요. 같은 조건으로 다음 공간을 찾아볼게요.'
         : '같은 조건으로 다른 공간을 찾아볼게요.',
       application_state: ctx.applicationState ?? emptyApplicationState(),
+      signal: 'request_alternative',
+      action: 'next_candidate',
+      can_submit: false,
     };
 
     ctx.updatedAt = new Date().toISOString();
-    ctx.lastIntent = 'request_alternative';
     ctx.lastFilledSlots = result.filled_slots;
     ctx.applicationState = result.application_state;
 
@@ -169,7 +171,6 @@ export async function handleChatRequest(
       {
         history: historyWithAssistant,
         status: ctx.conversationStatus,
-        lastIntent: result.intent,
         lastFilledSlots: result.filled_slots,
         lastApplicationState: result.application_state,
         confirmedReservationLabel: ctx.confirmedReservationLabel,
@@ -203,17 +204,24 @@ export async function handleChatRequest(
       conversation_id: msg.conversationId,
       filled_slots: previousSlots ?? emptyFilledSlots(),
       missing_required: [],
-      intent: 'out_of_scope',
       ready_to_search: false,
       assistant_message: parseFailureMessage(error),
       application_state: ctx.applicationState ?? emptyApplicationState(),
+      signal: 'out_of_scope',
+      action: 'none',
+      can_submit: false,
     };
   }
 
   // 슬롯·신청서·intent·메시지는 서버 /parse(LLM + 하드 가드)가 단일 권한으로 결정한다.
   // 클라에서는 (1) 지원 범위를 벗어난 요청 클래스 차단(스코프 가드), (2) 종료시각 정규화,
   // (3) 정원 preflight(DB 사실), (4) draft 인원-슬롯 동기화만 한다.
-  result = applyChatSafetyOverride(result, msg.latestMessage, ctx.applicationState);
+  result = applyChatSafetyOverride(
+    result,
+    msg.latestMessage,
+    ctx.applicationState,
+    previousSlots ?? null,
+  );
   result = {
     ...result,
     filled_slots: normalizeSlotEndTime(result.filled_slots),
@@ -241,7 +249,6 @@ export async function handleChatRequest(
   ctx.confirmedSpaceCode = null;
   ctx.confirmedSpaceLabel = null;
   ctx.updatedAt = new Date().toISOString();
-  ctx.lastIntent = result.intent;
   ctx.lastFilledSlots = result.filled_slots;
   ctx.applicationState = result.application_state;
   if (capacityDeclined) {
@@ -263,7 +270,6 @@ export async function handleChatRequest(
     msg.conversationId,
     {
       history: historyWithAssistant,
-      lastIntent: result.intent,
       lastFilledSlots: result.filled_slots,
       lastApplicationState: result.application_state,
     },

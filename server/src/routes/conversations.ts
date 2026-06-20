@@ -43,7 +43,6 @@ function toDto(row: Conversation): z.infer<typeof ConversationDto> {
     status: row.status,
     title: row.title ?? null,
     history: (row.history as unknown as ChatMessage[]) ?? [],
-    lastIntent: row.lastIntent ?? null,
     lastFilledSlots: (row.lastFilledSlots as unknown) ?? null,
     lastApplicationState: parseStoredApplicationState(row.lastApplicationState),
     confirmedReservationForm: parseStoredReservationForm(row.confirmedReservationForm),
@@ -190,9 +189,6 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
         : generatedTitle
           ? { title: generatedTitle }
           : {}),
-      ...(body.lastIntent !== undefined
-        ? { lastIntent: body.lastIntent }
-        : {}),
       ...(lastFilledSlotsProvided
         ? { lastFilledSlots: lastFilledSlotsJson }
         : {}),
@@ -224,9 +220,6 @@ export async function conversationsRoute(app: FastifyInstance): Promise<void> {
         : generatedTitle
           ? { title: generatedTitle }
           : {}),
-      ...(body.lastIntent !== undefined
-        ? { lastIntent: body.lastIntent }
-        : {}),
       ...(lastFilledSlotsProvided && body.lastFilledSlots !== null
         ? { lastFilledSlots: body.lastFilledSlots as Prisma.InputJsonValue }
         : {}),

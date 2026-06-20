@@ -10,7 +10,6 @@ import type {
   AutomationStatus,
   FilledSlots,
   ReservationFormData,
-  ApplicationState,
   ConversationSessionSummary,
   ReminderDto,
 } from './types';
@@ -87,16 +86,6 @@ export interface PopupDismissReminder {
 export interface PopupAcceptReminder {
   type: 'POPUP_ACCEPT_REMINDER';
   reminderId: string;
-}
-
-export interface PopupApplySuggestedMemory {
-  type: 'POPUP_APPLY_SUGGESTED_MEMORY';
-  conversationId: string;
-}
-
-export interface PopupDismissSuggestedMemory {
-  type: 'POPUP_DISMISS_SUGGESTED_MEMORY';
-  conversationId: string;
 }
 
 export interface PopupOpenLoginTab {
@@ -284,11 +273,6 @@ export interface ContentPreviewResult {
   error?: string;
 }
 
-export interface ApplicationStateResponse {
-  ok: boolean;
-  applicationState?: ApplicationState;
-  error?: string;
-}
 
 export interface ConversationListResponse {
   ok: boolean;
@@ -317,8 +301,6 @@ export type PopupToBackground =
   | PopupGetReminder
   | PopupDismissReminder
   | PopupAcceptReminder
-  | PopupApplySuggestedMemory
-  | PopupDismissSuggestedMemory
   | PopupOpenLoginTab;
 
 export type BackgroundToPopup =

@@ -4,7 +4,6 @@ import type {
   ChatMessage,
   ConversationStatus,
   FilledSlots,
-  Intent,
   ReservationFormData,
   SpaceCandidate,
 } from '../shared/types';
@@ -20,7 +19,6 @@ export interface ConversationContext {
   conversationId: string;
   title: string | null;
   history: ChatMessage[];
-  lastIntent: Intent | null;
   lastFilledSlots: FilledSlots | null;
   applicationState: ApplicationState | null;
   conversationStatus: ConversationStatus;
@@ -72,7 +70,6 @@ export function getOrCreateContext(conversationId: string): ConversationContext 
       conversationId,
       title: null,
       history: [],
-      lastIntent: null,
       lastFilledSlots: null,
       applicationState: null,
       conversationStatus: 'active',

@@ -1,12 +1,10 @@
 import type {
   ApplicationState,
+  FilledSlots,
   ParseResult,
   ReservationFormData,
 } from '../shared/types';
 import { emptyFilledSlots } from '../../../shared/reservation/slotPolicy';
-
-const MAX_EVENT_NAME_LENGTH = 50;
-const MAX_PURPOSE_LENGTH = 500;
 
 const REPEAT_SCHEDULE_PATTERN = /매주|매달|매월|매일|격주|정기적으로|이번\s*달.*(?:매주|매일)/;
 const REPEAT_RESERVATION_PATTERN = /(?:반복|정기)\s*(?:예약|신청|대여|사용|일정|패턴)/;
@@ -14,13 +12,6 @@ const RESERVATION_REPEAT_PATTERN =
   /(?:예약|신청|대여|사용|빌리|잡아|잡아줘|잡아\s*줘).{0,12}(?:반복|정기)|(?:반복|정기).{0,12}(?:예약|신청|대여|사용|빌리|잡아|잡아줘|잡아\s*줘)/;
 const APPLICATION_FIELD_LABEL_PATTERN =
   '(?:주관단체|단체|행사명|행사구분|사용목적|목적|행사인원|인원)';
-
-type ApplicationLengthIssue = {
-  field: 'eventName' | 'purpose';
-  label: string;
-  max: number;
-  actual: number;
-};
 
 function normalizeWhitespace(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
@@ -47,46 +38,6 @@ function hasRepeatReservationCondition(text: string): boolean {
   if (REPEAT_SCHEDULE_PATTERN.test(normalized)) return true;
   if (REPEAT_RESERVATION_PATTERN.test(normalized)) return true;
   return RESERVATION_REPEAT_PATTERN.test(normalized);
-}
-
-function hasAmbiguousHangsaTerm(text: string | undefined): boolean {
-  if (!text) return false;
-  const normalized = normalizeWhitespace(text);
-  const ambiguousTerm =
-    /행사\s*구분.*(?:모임|행사|활동)|(?:^|[\s,，])(?:모임|행사|활동)(?=$|[\s,，.!?])/;
-  return ambiguousTerm.test(normalized);
-}
-
-function findApplicationLengthIssue(
-  draft: ReservationFormData | null | undefined,
-): ApplicationLengthIssue | null {
-  if (!draft) return null;
-
-  const eventNameLength = normalizeWhitespace(draft.eventName).length;
-  if (eventNameLength > MAX_EVENT_NAME_LENGTH) {
-    return {
-      field: 'eventName',
-      label: '행사명',
-      max: MAX_EVENT_NAME_LENGTH,
-      actual: eventNameLength,
-    };
-  }
-
-  const purposeLength = normalizeWhitespace(draft.purpose).length;
-  if (purposeLength > MAX_PURPOSE_LENGTH) {
-    return {
-      field: 'purpose',
-      label: '사용목적',
-      max: MAX_PURPOSE_LENGTH,
-      actual: purposeLength,
-    };
-  }
-
-  return null;
-}
-
-function applicationLengthIssueMessage(issue: ApplicationLengthIssue): string {
-  return `${issue.label}이 너무 길어요. 현재 ${issue.actual}자라서 GLS 저장 전에 실패할 수 있어요. ${issue.max}자 이내로 줄여서 다시 알려주세요.`;
 }
 
 export function emptyApplicationState(): ApplicationState {
@@ -156,24 +107,29 @@ export function applyChatSafetyOverride(
   result: ParseResult,
   latestMessage: string,
   previousApplicationState: ApplicationState | null,
+  previousSlots: FilledSlots | null,
 ): ParseResult {
+  // 지원범위 밖 요청은 안내만 하고 누적 데이터(slots/application)는 보존한다 — self-loop.
+  const preservedSlots = previousSlots ?? emptyFilledSlots();
+  const preservedApplication = previousApplicationState ?? result.application_state;
   if (mostlyEnglishReservationRequest(latestMessage)) {
     return {
       ...result,
-      filled_slots: emptyFilledSlots(),
-      missing_required: ['headcount', 'date', 'start_time', 'end_time'],
-      intent: 'out_of_scope',
+      filled_slots: preservedSlots,
+      signal: 'out_of_scope',
+      action: 'none',
       ready_to_search: false,
       assistant_message:
         '현재는 한국어 예약 요청만 안정적으로 처리할 수 있어요. 날짜, 시간, 인원을 한국어로 다시 알려주세요.',
-      application_state: previousApplicationState ?? emptyApplicationState(),
+      application_state: preservedApplication,
     };
   }
 
   if (hasRepeatReservationCondition(latestMessage)) {
     return {
       ...result,
-      intent: 'out_of_scope',
+      signal: 'out_of_scope',
+      action: 'none',
       ready_to_search: false,
       assistant_message:
         '반복 예약은 아직 자동으로 처리하지 않아요. 안전하게 진행하려면 한 번에 하나의 날짜와 시간만 알려주세요.',
@@ -184,7 +140,8 @@ export function applyChatSafetyOverride(
   if (hasUnsupportedFacilityCondition(latestMessage)) {
     return {
       ...result,
-      intent: 'out_of_scope',
+      signal: 'out_of_scope',
+      action: 'none',
       ready_to_search: false,
       assistant_message:
         '빔프로젝터, 화이트보드 같은 시설·장비 조건은 아직 GLS에서 자동 확인할 수 없어요. 날짜, 시간, 인원 기준으로만 찾을 수 있습니다.',
@@ -195,7 +152,8 @@ export function applyChatSafetyOverride(
   if (asksToChangeSubmittedReservation(latestMessage)) {
     return {
       ...result,
-      intent: 'out_of_scope',
+      signal: 'out_of_scope',
+      action: 'none',
       ready_to_search: false,
       assistant_message:
         '이미 저장되거나 제출된 예약의 취소·변경은 이 확장에서 대신 처리하지 않아요. GLS 화면에서 직접 확인해 주세요.',
@@ -206,7 +164,8 @@ export function applyChatSafetyOverride(
   if (asksForSpecificRoomAvailabilityWindow(latestMessage)) {
     return {
       ...result,
-      intent: 'out_of_scope',
+      signal: 'out_of_scope',
+      action: 'none',
       ready_to_search: false,
       assistant_message: unsupportedAvailabilityWindowMessage(),
       application_state: previousApplicationState ?? result.application_state,
@@ -214,55 +173,4 @@ export function applyChatSafetyOverride(
   }
 
   return result;
-}
-
-export function applyApplicationLengthGuard(result: ParseResult): ParseResult {
-  const issue = findApplicationLengthIssue(result.application_state.draft);
-  if (!issue) return result;
-
-  return {
-    ...result,
-    intent: 'modify_application',
-    ready_to_search: false,
-    assistant_message: applicationLengthIssueMessage(issue),
-    application_state: {
-      ...result.application_state,
-      missing_application: Array.from(new Set([
-        issue.field,
-        ...result.application_state.missing_application,
-      ])),
-      needs_application_collection: true,
-      suggested_memory: null,
-      recommendation: null,
-      source: result.application_state.source ?? 'user_modified',
-    },
-  };
-}
-
-export function applyApplicationCollectionPromptGuard(
-  result: ParseResult,
-  latestMessage?: string,
-): ParseResult {
-  const applicationState = result.application_state;
-  if (!applicationState.needs_application_collection) return result;
-
-  const needsOnlyHangsa =
-    applicationState.missing_application.length === 1 &&
-    applicationState.missing_application[0] === 'hangsaGbCode' &&
-    applicationState.confidence.hangsaGbCode === 'low';
-  const needsAmbiguousHangsa =
-    applicationState.missing_application.includes('hangsaGbCode') &&
-    applicationState.confidence.hangsaGbCode === 'low' &&
-    hasAmbiguousHangsaTerm(latestMessage);
-  if (!needsOnlyHangsa && !needsAmbiguousHangsa) return result;
-
-  return {
-    ...result,
-    ready_to_search:
-      result.intent === 'modify_application' || needsAmbiguousHangsa
-        ? false
-        : result.ready_to_search,
-    assistant_message:
-      '이 일정은 학생회/동아리 행사에 더 가깝나요, 학과 주관 행사에 더 가깝나요?',
-  };
 }

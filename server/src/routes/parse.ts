@@ -20,9 +20,10 @@ import {
   ParseResponse,
   type ApplicationState as ApplicationStateType,
   type FilledSlots as FilledSlotsType,
+  type Signal,
 } from '../schemas/parse.js';
 import {
-  type LLMParseResult,
+  type LLMRawResult,
   type MemoryContext,
   parseWithLLM,
   summarizeConversationTitle,
@@ -30,6 +31,8 @@ import {
 import {
   buildApplicationState,
   computeMemoryStats,
+  deriveAction,
+  hasCompleteReservationForm,
   parseStoredReservationForm,
   summarizeReservationLabel,
 } from '../application/state.js';
@@ -37,6 +40,7 @@ import {
   clearTimeSlots,
   emptyFilledSlots,
   hasAmbiguousBareMeridiemTime,
+  isSearchReady,
   isSupportedReservationMinute,
   timeToMinutes,
 } from '../../../shared/reservation/slotPolicy.js';
@@ -70,6 +74,19 @@ function makeEmptySlots(): FilledSlotsType {
   return emptyFilledSlots<FilledSlotsType>();
 }
 
+/**
+ * 라우트 작업 타입 — LLM raw 출력(filled_slots/signal/application) + 서버 파생
+ * (missing_required/ready_to_search)을 합친다. 가드는 이 타입 위에서 동작한다.
+ */
+interface ParseDraft {
+  filled_slots: FilledSlotsType;
+  missing_required: string[];
+  ready_to_search: boolean;
+  signal: Signal;
+  assistant_message: string;
+  application?: LLMRawResult['application'];
+}
+
 function isLikelyOutOfScopeSmallTalk(text: string): boolean {
   const normalized = text.trim().replace(/\s+/g, ' ');
   if (!normalized) return false;
@@ -87,11 +104,26 @@ function isSymbolOnlyInput(text: string): boolean {
   return !/[0-9A-Za-z가-힣]/.test(normalized);
 }
 
-function makeOutOfScopeResult(): LLMParseResult {
+/** 필수 슬롯 누락 목록 파생(서버 단일 출처). out_of_scope 등 로컬 경로에서 재사용. */
+function deriveMissingRequired(slots: FilledSlotsType): string[] {
+  const missing: string[] = [];
+  if (slots.headcount == null) missing.push('headcount');
+  if (!slots.date) missing.push('date');
+  if (!slots.start_time) missing.push('start_time');
+  if (!slots.end_time && slots.duration_min == null) missing.push('end_time');
+  if (!isResolvableCampus(slots.campus)) missing.push('campus');
+  return missing;
+}
+
+/**
+ * 잡담 등 out_of_scope 안내. 누적된 슬롯은 보존한다(데이터 트랙 불변) — 대화 중
+ * 잠깐 잡담했다고 모아둔 일정·인원을 날리지 않는다. (옛 버그: 슬롯 전체 null 처리.)
+ */
+function makeOutOfScopeResult(baseSlots: FilledSlotsType): ParseDraft {
   return {
-    filled_slots: makeEmptySlots(),
-    missing_required: ['headcount', 'date', 'start_time', 'end_time'],
-    intent: 'out_of_scope',
+    filled_slots: baseSlots,
+    missing_required: deriveMissingRequired(baseSlots),
+    signal: 'out_of_scope',
     ready_to_search: false,
     assistant_message:
       '저는 GLS 공간예약을 도와드리는 도우미예요. 예약하실 날짜, 시간, 인원을 알려주시면 찾아드릴게요.',
@@ -101,12 +133,12 @@ function makeOutOfScopeResult(): LLMParseResult {
 function makeInvalidInputResult(
   message: string,
   missingRequired: string[] = [],
-  intent: LLMParseResult['intent'] = 'new_reservation',
-): LLMParseResult {
+  signal: Signal = 'info',
+): ParseDraft {
   return {
     filled_slots: makeEmptySlots(),
     missing_required: missingRequired,
-    intent,
+    signal,
     ready_to_search: false,
     assistant_message: message,
   };
@@ -197,7 +229,7 @@ function isPastSlot(slots: FilledSlotsType, now: string): boolean {
   return nowMinutes != null && startMinutes != null && startMinutes <= nowMinutes;
 }
 
-function applyImpossibleSlotOverride(result: LLMParseResult, now: string): LLMParseResult {
+function applyImpossibleSlotOverride(result: ParseDraft, now: string): ParseDraft {
   if (!isPastSlot(result.filled_slots, now)) return result;
   return makeInvalidInputResult(SLOT_GUARD_MESSAGES.past_slot, ['date'], 'out_of_scope');
 }
@@ -207,7 +239,7 @@ const GUARD_FORCES_OUT_OF_SCOPE = new Set<SlotStateGuardReason>([
   'over_duration',
 ]);
 
-function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResult {
+function applySlotStateGuards(result: ParseDraft, now: string): ParseDraft {
   const outcome = evaluateSlotStateGuards(result.filled_slots, now);
   if (!outcome) return result;
   return {
@@ -215,7 +247,7 @@ function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResu
     filled_slots: outcome.filledSlots,
     missing_required: outcome.missingRequired,
     ready_to_search: false,
-    intent: GUARD_FORCES_OUT_OF_SCOPE.has(outcome.reason) ? 'out_of_scope' : result.intent,
+    signal: GUARD_FORCES_OUT_OF_SCOPE.has(outcome.reason) ? 'out_of_scope' : result.signal,
     assistant_message: outcome.message,
   };
 }
@@ -225,9 +257,9 @@ function applySlotStateGuards(result: LLMParseResult, now: string): LLMParseResu
  * 쉽다. 캠퍼스 명시가 없으면 campus 를 비우고 되묻는다. (탐지·문구는 shared.)
  */
 function applyStudentCenterCampusClarification(
-  result: LLMParseResult,
+  result: ParseDraft,
   text: string,
-): LLMParseResult {
+): ParseDraft {
   const building = result.filled_slots.building?.trim();
   if (!mentionsStudentCenter(text)) return result;
   if (hasExplicitStudentCenterCampus(text)) return result;
@@ -256,7 +288,7 @@ const CAMPUS_CLARIFICATION_MESSAGE =
  * 오판한 경우(ready_to_search=true)에만 안내를 캠퍼스 되묻기로 덮어쓰고,
  * 이미 다른 항목을 묻고 있으면(ready_to_search=false) 그 문구를 보존한다.
  */
-function applyRequiredCampusGuard(result: LLMParseResult): LLMParseResult {
+function applyRequiredCampusGuard(result: ParseDraft): ParseDraft {
   if (isResolvableCampus(result.filled_slots.campus)) return result;
   return {
     ...result,
@@ -285,9 +317,9 @@ function extractExplicitSpaceCode(text: string): string | null {
  */
 async function applyExplicitSpaceCodeOverride(
   app: FastifyInstance,
-  result: LLMParseResult,
+  result: ParseDraft,
   text: string,
-): Promise<LLMParseResult> {
+): Promise<ParseDraft> {
   const code = extractExplicitSpaceCode(text);
   if (!code) return result;
 
@@ -313,9 +345,9 @@ async function applyExplicitSpaceCodeOverride(
 }
 
 function applyAmbiguousMeridiemSlotOverride(
-  result: LLMParseResult,
+  result: ParseDraft,
   text: string,
-): LLMParseResult {
+): ParseDraft {
   if (!hasAmbiguousBareMeridiemTime(text)) return result;
   return {
     ...result,
@@ -326,7 +358,7 @@ function applyAmbiguousMeridiemSlotOverride(
   };
 }
 
-function makeImpossibleInputResult(text: string, now: string): LLMParseResult | null {
+function makeImpossibleInputResult(text: string, now: string): ParseDraft | null {
   if (hasImpossibleHeadcount(text)) {
     return makeInvalidInputResult(
       '사용 인원은 1명 이상이어야 해요. 실제 사용할 인원을 다시 알려주세요.',
@@ -472,7 +504,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       }));
 
       // 2) LLM 호출. 명백한 잡담은 LLM 실패에 의존하지 않고 로컬에서 안전하게 안내한다.
-      let llmResult: LLMParseResult;
+      let llmResult: ParseDraft;
       const impossibleInputResult = makeImpossibleInputResult(latestUserMessage, body.now);
       if (impossibleInputResult) {
         llmResult = impossibleInputResult;
@@ -482,18 +514,27 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
           ['headcount', 'date', 'start_time', 'end_time'],
         );
       } else if (isLikelyOutOfScopeSmallTalk(latestUserMessage)) {
-        llmResult = makeOutOfScopeResult();
+        llmResult = makeOutOfScopeResult(previousFilledSlots ?? makeEmptySlots());
       } else {
         try {
-          // LLM 이 슬롯·신청서·intent·메시지를 결정한다(단일 권한). 아래는 추출이 아니라
-          // 정책 위반을 사후 교정하는 하드 가드뿐이다: 과거 시각, 캠퍼스 모호성,
-          // 슬롯 상태 위반(미래창/자정/30분/시간대/길이), 공간코드 DB 보강.
-          llmResult = await parseWithLLM({
+          // LLM 은 값(slots/application)+화행(signal)+메시지만 낸다(단일 권한: 해석).
+          // missing_required·ready_to_search 는 서버가 slots 에서 파생한다(정합성).
+          // 아래는 추출이 아니라 정책 위반을 사후 교정하는 하드 가드뿐이다: 과거 시각,
+          // 캠퍼스 모호성, 슬롯 상태 위반(미래창/자정/30분/시간대/길이), 공간코드 DB 보강.
+          const raw = await parseWithLLM({
             history: body.history,
             now: body.now,
             memories: memoryContext,
             stateSnapshot,
           });
+          llmResult = {
+            filled_slots: raw.filled_slots,
+            signal: raw.signal,
+            assistant_message: raw.assistant_message,
+            application: raw.application,
+            missing_required: deriveMissingRequired(raw.filled_slots),
+            ready_to_search: isSearchReady(raw.filled_slots),
+          };
           llmResult = applyStudentCenterCampusClarification(llmResult, latestUserMessage);
           llmResult = applyImpossibleSlotOverride(llmResult, body.now);
           llmResult = applySlotStateGuards(llmResult, body.now);
@@ -528,18 +569,33 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       });
       const assistantMessage = assistantMessageOverride ?? llmResult.assistant_message;
 
+      // 전이 reducer — 화행 + 값 diff 로 클라가 실행할 action 을 파생한다(클라 휴리스틱 제거).
+      // hasCandidate 는 직전 제안 공간 유무로 판단(클라가 client_last_proposed_space 로 전달).
+      const hasCandidate = Boolean(body.client_last_proposed_space);
+      const appComplete = hasCompleteReservationForm(applicationState.draft);
+      const signal = llmResult.signal;
+      const { action, canSubmit } = deriveAction({
+        previousSlots: previousFilledSlots,
+        nextSlots: llmResult.filled_slots,
+        signal,
+        hasCandidate,
+        appComplete,
+      });
+
       const response: ParseResponse = {
         conversation_id: body.conversation_id,
         filled_slots: llmResult.filled_slots,
         missing_required: llmResult.missing_required,
-        intent: llmResult.intent,
         ready_to_search: llmResult.ready_to_search,
         assistant_message: assistantMessage,
         application_state: applicationState,
+        signal,
+        action,
+        can_submit: canSubmit,
       };
 
       let generatedTitle: string | null = null;
-      if (!existing?.title && llmResult.ready_to_search && llmResult.intent !== 'cancel') {
+      if (!existing?.title && llmResult.ready_to_search && signal !== 'cancel') {
         try {
           generatedTitle = await summarizeConversationTitle({
             history: body.history,
@@ -553,7 +609,7 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
       // 3) Conversation mirror upsert (D-018).
       //   - status: 기본 active. intent=cancel 이면 abandoned_user.
       //   - completed 마킹은 실제 예약 제출 시 별도 라우트에서. 여기선 active/abandoned_user 만 다룬다.
-      const nextStatus = llmResult.intent === 'cancel' ? 'abandoned_user' : 'active';
+      const nextStatus = signal === 'cancel' ? 'abandoned_user' : 'active';
 
       try {
         await app.prisma.conversation.upsert({
@@ -564,14 +620,12 @@ export async function parseRoute(app: FastifyInstance): Promise<void> {
             status: nextStatus,
             history: body.history,
             ...(generatedTitle ? { title: generatedTitle } : {}),
-            lastIntent: llmResult.intent,
             lastFilledSlots: llmResult.filled_slots,
             lastApplicationState: applicationState,
           },
           update: {
             history: body.history,
             ...(generatedTitle ? { title: generatedTitle } : {}),
-            lastIntent: llmResult.intent,
             lastFilledSlots: llmResult.filled_slots,
             lastApplicationState: applicationState,
             status: nextStatus,

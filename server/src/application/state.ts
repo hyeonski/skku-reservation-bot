@@ -1,4 +1,5 @@
 import type {
+  Action,
   ApplicationField,
   ApplicationRecommendation,
   ApplicationState,
@@ -6,9 +7,11 @@ import type {
   FilledSlots,
   ReservationDraftData,
   ReservationFormData,
+  Signal,
   SuggestedApplicationMemory,
 } from '../schemas/parse.js';
 import type { LLMApplication } from '../llm/client.js';
+import { isSearchReady } from '../../../shared/reservation/slotPolicy.js';
 
 const APPLICATION_FIELDS: ApplicationField[] = [
   'organization',
@@ -364,4 +367,78 @@ export function parseStoredReservationForm(value: unknown): ReservationFormData 
 
 export function hangsaLabelFromCode(code: string): string {
   return CODE_TO_LABEL[code] ?? code;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 전이 reducer — 화행(signal) + 값 diff 에서 action 을 결정론적으로 파생.
+// (전환기: signal 은 당분간 intent 에서 매핑. P6 에서 LLM 직접 출력으로 대체.)
+// ────────────────────────────────────────────────────────────────────────────
+
+const SLOT_KEYS: (keyof FilledSlots)[] = [
+  'date',
+  'start_time',
+  'end_time',
+  'duration_min',
+  'headcount',
+  'campus',
+  'building',
+  'space',
+];
+
+function slotsEqual(a: FilledSlots | null, b: FilledSlots | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return SLOT_KEYS.every((k) => a[k] === b[k]);
+}
+
+export interface DeriveActionArgs {
+  previousSlots: FilledSlots | null;
+  nextSlots: FilledSlots;
+  signal: Signal;
+  /** 직전 턴에 제안된 공간이 있나(= 후보 리스트 존재). */
+  hasCandidate: boolean;
+  /** 신청서(application) 4필드가 모두 채워졌나. */
+  appComplete: boolean;
+}
+
+export interface DeriveActionResult {
+  action: Action;
+  canSubmit: boolean;
+}
+
+/**
+ * transition 부수효과(action) 결정. 강제 순서는 "필수필터→탐색→제출" 하나뿐이고,
+ * slots/application 트랙은 병렬이라 순서를 강제하지 않는다.
+ * - search: 필수슬롯이 막 완성됐거나(첫 탐색), 완성 상태에서 슬롯이 바뀜(cascade 재탐색)
+ * - next_candidate: "다른 곳"(데이터 불변) + 후보 존재
+ * - fill_form: accept + 제출 가능(폼만, 제출은 버튼)
+ * cascade 비대칭: 슬롯 변경만 재탐색을 부른다. 신청서 변경은 후보를 유지한다.
+ */
+export function deriveAction(args: DeriveActionArgs): DeriveActionResult {
+  const { previousSlots, nextSlots, signal, hasCandidate, appComplete } = args;
+  const slotsComplete = isSearchReady(nextSlots);
+  const slotsChanged = !slotsEqual(previousSlots, nextSlots);
+  const prevComplete = isSearchReady(previousSlots);
+  const canSubmit = hasCandidate && appComplete;
+
+  let action: Action = 'none';
+  switch (signal) {
+    case 'cancel':
+    case 'out_of_scope':
+      action = 'none';
+      break;
+    case 'request_alternative':
+      action = hasCandidate ? 'next_candidate' : 'none';
+      break;
+    case 'accept':
+      action = canSubmit ? 'fill_form' : 'none';
+      break;
+    case 'info':
+    default:
+      // 첫 완성(!prevComplete) 또는 완성 상태에서의 슬롯 변경(cascade) → 탐색.
+      action = slotsComplete && (slotsChanged || !prevComplete) ? 'search' : 'none';
+      break;
+  }
+
+  return { action, canSubmit };
 }

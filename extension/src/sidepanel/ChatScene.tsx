@@ -479,10 +479,11 @@ export function ChatScene({ conv, onBack, onNew }: ChatSceneProps) {
               frequencyHint: suggestedMemory.label,
             }}
             onAccept={() => {
-              void conv.applySuggestedMemory();
+              // 추천 수락도 일반 채팅 흐름(/parse)으로 통일 — 서버가 ConversationState 의 유일한 주인.
+              void conv.sendMessage('네, 그걸로 신청할게요');
             }}
             onDecline={() => {
-              void conv.dismissSuggestedMemory();
+              void conv.sendMessage('아니요, 신청 정보는 직접 입력할게요');
             }}
           />
         )}

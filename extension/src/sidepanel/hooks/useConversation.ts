@@ -17,7 +17,6 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isSearchReady } from '../../../../shared/reservation/slotPolicy';
 import type {
   AutomationStatus,
   ApplicationState,
@@ -121,34 +120,6 @@ function emptyState(conversationId: string): ConversationState {
 function freshConversationId(): string {
   // crypto.randomUUID 는 사이드패널 컨텍스트에서도 사용 가능 (Chrome 110+).
   return crypto.randomUUID();
-}
-
-function hasSearchReadySlots(slots: FilledSlots | null | undefined): boolean {
-  // 탐색 준비 판정은 shared/reservation/slotPolicy 단일 출처를 따른다
-  // (campus 해석 가능 여부 포함).
-  return isSearchReady(slots);
-}
-
-function mergeFilledSlots(
-  previous: FilledSlots | null | undefined,
-  next: FilledSlots,
-): FilledSlots {
-  if (!previous) return next;
-  return {
-    date: next.date ?? previous.date,
-    start_time: next.start_time ?? previous.start_time,
-    end_time: next.end_time ?? previous.end_time,
-    duration_min: next.duration_min ?? previous.duration_min,
-    headcount: next.headcount ?? previous.headcount,
-    campus: next.campus ?? previous.campus,
-    building: next.building ?? previous.building,
-    space: next.space ?? previous.space,
-  };
-}
-
-function hasSlotSearchCue(text: string): boolean {
-  const normalized = text.replace(/\s+/g, '');
-  return /(?:바꾸|변경|수정|정정|다시|아니|말고|대신|시간|시부터|까지|내일|모레|다음|월|일|캠퍼스|율전|명륜|건물|공간|명으로)/.test(normalized);
 }
 
 /** ParseResult.filled_slots → shared FilledSlots 캐스팅 (구조 동일). */
@@ -395,16 +366,6 @@ export function useConversation() {
     }
 
     const parsed = res.result;
-    const shouldPreserveActiveSlots =
-      parsed.intent !== 'cancel' &&
-      parsed.intent !== 'out_of_scope' &&
-      parsed.intent !== 'request_alternative' &&
-      previousState.proposedCandidate !== null &&
-      !hasSlotSearchCue(trimmed) &&
-      !hasSearchReadySlots(parsed.filled_slots);
-    const nextSlots = shouldPreserveActiveSlots
-      ? mergeFilledSlots(previousState.slots, parsed.filled_slots)
-      : parsed.filled_slots;
     const assistantMessageTs = new Date().toISOString();
     const botMsg: UiMessage = {
       id: nowMessageId('m-a'),
@@ -413,46 +374,19 @@ export function useConversation() {
       ts: formatHHMM(assistantMessageTs),
       isoTs: assistantMessageTs,
     };
+
+    // 데이터 트랙(slots/application)은 서버 응답을 단일 진실로 그대로 반영한다.
+    // 클라 병합·널링 휴리스틱 제거 — out_of_scope 도 서버가 보낸 값을 보존한다(슬롯 안 날림).
+    const cancelled = parsed.signal === 'cancel';
     setState((s) => ({
       ...s,
       messages: [...s.messages, botMsg],
       parsing: false,
-      conversationStatus: parsed.intent === 'cancel' ? 'abandoned_user' : 'active',
-      slots:
-        parsed.intent === 'cancel' || parsed.intent === 'out_of_scope'
-          ? null
-          : parsed.intent === 'request_alternative'
-            ? s.slots
-            : nextSlots,
-      missingRequired:
-        parsed.intent === 'cancel' || parsed.intent === 'out_of_scope'
-          ? []
-          : parsed.intent === 'request_alternative'
-            ? s.missingRequired
-            : parsed.missing_required,
-      applicationState:
-        parsed.intent === 'cancel'
-          ? null
-          : parsed.intent === 'request_alternative'
-            ? s.applicationState
-            : parsed.application_state,
-      ...(parsed.intent === 'request_alternative'
-        ? {
-            proposedCandidate: null,
-            submitStep: null,
-          }
-        : {}),
-      ...(parsed.intent === 'modify_slot' && parsed.ready_to_search
-        ? {
-            automationStatus: { kind: 'idle' as const },
-            candidates: [],
-            candidateResults: new Map<string, CandidateProgress>(),
-            currentIdx: -1,
-            proposedCandidate: null,
-            submitStep: null,
-          }
-        : {}),
-      ...(parsed.intent === 'cancel'
+      conversationStatus: cancelled ? 'abandoned_user' : 'active',
+      slots: parsed.filled_slots,
+      missingRequired: parsed.missing_required,
+      applicationState: parsed.application_state,
+      ...(cancelled
         ? {
             automationStatus: { kind: 'idle' as const },
             candidates: [],
@@ -462,98 +396,84 @@ export function useConversation() {
             submitStep: null,
             loginPrompt: null,
           }
-        : res.status
+        : parsed.action === 'search'
           ? {
-              automationStatus: res.status,
-              candidates: res.status.kind === 'no_candidate' ? [] : s.candidates,
-              candidateResults:
-                res.status.kind === 'no_candidate'
-                  ? new Map<string, CandidateProgress>()
-                  : s.candidateResults,
-              currentIdx: res.status.kind === 'no_candidate' ? -1 : s.currentIdx,
-              proposedCandidate:
-                res.status.kind === 'no_candidate' ? null : s.proposedCandidate,
-              submitStep: res.status.kind === 'no_candidate' ? null : s.submitStep,
-              loginPrompt: res.status.kind === 'login_required' ? s.loginPrompt : null,
+              // 새/재 탐색(cascade 포함) — 직전 후보·진행 상태 초기화.
+              automationStatus: { kind: 'idle' as const },
+              candidates: [],
+              candidateResults: new Map<string, CandidateProgress>(),
+              currentIdx: -1,
+              proposedCandidate: null,
+              submitStep: null,
             }
-        : {}),
+          : parsed.action === 'next_candidate'
+            ? { proposedCandidate: null, submitStep: null }
+            : res.status
+              ? {
+                  automationStatus: res.status,
+                  candidates: res.status.kind === 'no_candidate' ? [] : s.candidates,
+                  candidateResults:
+                    res.status.kind === 'no_candidate'
+                      ? new Map<string, CandidateProgress>()
+                      : s.candidateResults,
+                  currentIdx: res.status.kind === 'no_candidate' ? -1 : s.currentIdx,
+                  proposedCandidate:
+                    res.status.kind === 'no_candidate' ? null : s.proposedCandidate,
+                  submitStep: res.status.kind === 'no_candidate' ? null : s.submitStep,
+                  loginPrompt: res.status.kind === 'login_required' ? s.loginPrompt : null,
+                }
+              : {}),
     }));
 
-    const hasAlternativeContext =
-      previousState.proposedCandidate !== null ||
-      previousState.automationStatus.kind === 'candidate_found' ||
-      previousState.candidates.length > 0;
-    if (parsed.intent === 'request_alternative' && hasAlternativeContext) {
-      const altMsg: PopupRejectCandidate = {
-        type: 'POPUP_REJECT_CANDIDATE',
-        conversationId,
-      };
-      try {
-        await sendRuntime(altMsg);
-      } catch (e) {
-        setState((s) => ({ ...s, lastError: (e as Error).message }));
+    // 액션 실행 — 서버 reducer 가 결정. 클라는 분기 판단 없이 실행만 한다.
+    switch (parsed.action) {
+      case 'search': {
+        const startMsg: PopupStartSearch = {
+          type: 'POPUP_START_SEARCH',
+          conversationId,
+          slots: parsed.filled_slots,
+        };
+        try {
+          await sendRuntime(startMsg);
+        } catch (e) {
+          setState((s) => ({ ...s, lastError: (e as Error).message }));
+        }
+        break;
       }
-      return;
-    }
-
-    // 신청서가 완성된 상태에서 사용자가 최종 확정("응 예약 신청해줘") → 자동으로
-    // GLS 제출을 트리거한다. "GLS 신청 저장" 버튼 클릭과 동일한 경로(POPUP_CONFIRM_RESERVATION).
-    // LLM 이 confirm_reservation 으로 판정하고, 제안된 공간과 완성된 draft 가 있으며,
-    // 아직 제출 진행/완료 전일 때만 발사한다.
-    const confirmDraft = parsed.application_state.draft;
-    const applicationReadyToSubmit =
-      confirmDraft !== null &&
-      parsed.application_state.needs_application_collection === false &&
-      parsed.application_state.missing_application.length === 0 &&
-      Boolean(
-        confirmDraft.hangsaGbCode &&
-          confirmDraft.organization &&
-          confirmDraft.eventName &&
-          confirmDraft.purpose,
-      );
-    if (
-      parsed.intent === 'confirm_reservation' &&
-      previousState.proposedCandidate !== null &&
-      previousState.submitStep === null &&
-      previousState.automationStatus.kind !== 'done' &&
-      applicationReadyToSubmit &&
-      confirmDraft !== null
-    ) {
-      const confirmMsg: PopupConfirmReservation = {
-        type: 'POPUP_CONFIRM_RESERVATION',
-        conversationId,
-        spaceCode: previousState.proposedCandidate.glsSpaceCode,
-        confirmed: true,
-        formData: confirmDraft,
-      };
-      setState((s) => ({ ...s, submitStep: 'filling' }));
-      try {
-        await sendRuntime(confirmMsg);
-      } catch (e) {
-        setState((s) => ({ ...s, submitStep: null, lastError: (e as Error).message }));
+      case 'next_candidate': {
+        const altMsg: PopupRejectCandidate = {
+          type: 'POPUP_REJECT_CANDIDATE',
+          conversationId,
+        };
+        try {
+          await sendRuntime(altMsg);
+        } catch (e) {
+          setState((s) => ({ ...s, lastError: (e as Error).message }));
+        }
+        break;
       }
-      return;
-    }
-
-    const shouldStartSearch =
-      parsed.ready_to_search &&
-      hasSearchReadySlots(parsed.filled_slots) &&
-      (!previousState.proposedCandidate ||
-        hasSlotSearchCue(trimmed) ||
-        parsed.intent === 'modify_slot');
-    if (shouldStartSearch) {
-      // 곧바로 background 에 검색 시작 요청. 결과는 BG_STATUS_UPDATE /
-      // BG_SEARCH_STARTED / BG_CANDIDATE_RESULT 로 스트리밍.
-      const startMsg: PopupStartSearch = {
-        type: 'POPUP_START_SEARCH',
-        conversationId,
-        slots: parsed.filled_slots,
-      };
-      try {
-        await sendRuntime(startMsg);
-      } catch (e) {
-        setState((s) => ({ ...s, lastError: (e as Error).message }));
+      case 'fill_form': {
+        // accept → 신청 폼만 채움(미리보기). 실제 GLS 제출은 버튼 전용.
+        const draft = parsed.application_state.draft;
+        const proposed = previousState.proposedCandidate;
+        if (draft && proposed) {
+          const previewMsg: PopupPreviewReservation = {
+            type: 'POPUP_PREVIEW_RESERVATION',
+            conversationId,
+            spaceCode: proposed.glsSpaceCode,
+            formData: draft,
+          };
+          try {
+            await sendRuntime(previewMsg);
+          } catch (e) {
+            setState((s) => ({ ...s, lastError: (e as Error).message }));
+          }
+        }
+        break;
       }
+      case 'none':
+      default:
+        break;
     }
   }, []);
 
@@ -657,46 +577,6 @@ export function useConversation() {
     }
   }, []);
 
-  const applySuggestedMemory = useCallback(async () => {
-    const conversationId = stateRef.current.conversationId;
-    try {
-      const res = await sendRuntime<{
-        ok: boolean;
-        applicationState?: ApplicationState;
-        error?: string;
-      }>({
-        type: 'POPUP_APPLY_SUGGESTED_MEMORY',
-        conversationId,
-      });
-      if (!res.ok || !res.applicationState) {
-        throw new Error(res.error ?? '추천 신청 정보를 적용하지 못했습니다.');
-      }
-      setState((s) => ({ ...s, applicationState: res.applicationState ?? null }));
-    } catch (e) {
-      setState((s) => ({ ...s, lastError: (e as Error).message }));
-    }
-  }, []);
-
-  const dismissSuggestedMemory = useCallback(async () => {
-    const conversationId = stateRef.current.conversationId;
-    try {
-      const res = await sendRuntime<{
-        ok: boolean;
-        applicationState?: ApplicationState;
-        error?: string;
-      }>({
-        type: 'POPUP_DISMISS_SUGGESTED_MEMORY',
-        conversationId,
-      });
-      if (!res.ok || !res.applicationState) {
-        throw new Error(res.error ?? '추천 신청 정보를 갱신하지 못했습니다.');
-      }
-      setState((s) => ({ ...s, applicationState: res.applicationState ?? null }));
-    } catch (e) {
-      setState((s) => ({ ...s, lastError: (e as Error).message }));
-    }
-  }, []);
-
   const restoreConversation = useCallback(async (conversationId: string) => {
     const msg: PopupGetStatus = {
       type: 'POPUP_GET_STATUS',
@@ -775,8 +655,6 @@ export function useConversation() {
     previewReservation,
     findAlternative,
     openLoginTab,
-    applySuggestedMemory,
-    dismissSuggestedMemory,
     restoreConversation,
     cancel,
     newConversation,

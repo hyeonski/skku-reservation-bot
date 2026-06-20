@@ -290,7 +290,6 @@ export async function handleConfirm(
           {
             history: ctx.history,
             status: 'completed',
-            lastIntent: ctx.lastIntent,
             lastFilledSlots: ctx.lastFilledSlots,
             lastApplicationState: ctx.applicationState,
             confirmedReservationForm: formData,
@@ -375,7 +374,6 @@ export async function handleCancel(
   try {
     const abandoned = await apiClient.abandonConversation(msg.conversationId);
     ctx.history = abandoned.history;
-    ctx.lastIntent = abandoned.lastIntent;
     ctx.lastFilledSlots = abandoned.lastFilledSlots;
     ctx.applicationState = abandoned.lastApplicationState;
     ctx.conversationStatus = abandoned.status;

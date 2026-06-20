@@ -37,16 +37,29 @@ export const FilledSlots = z.object({
 });
 export type FilledSlots = z.infer<typeof FilledSlots>;
 
-export const Intent = z.enum([
-  'new_reservation',
+/**
+ * 흐름-제어 화행(speech-act). LLM 이 직접 출력하는 유일한 의도 신호.
+ * "어느 트랙(slots/application)이 바뀌나"는 화행이 아니라 값 diff 로 서버가 판단.
+ */
+export const Signal = z.enum([
+  'info',
+  'accept',
   'request_alternative',
-  'modify_slot',
-  'modify_application',
-  'confirm_reservation',
   'cancel',
   'out_of_scope',
 ]);
-export type Intent = z.infer<typeof Intent>;
+export type Signal = z.infer<typeof Signal>;
+
+/**
+ * transition 의 부수효과로 클라가 실행할 액션. 서버 reducer(deriveAction)가
+ * (현재 slots/application, 화행, 후보 유무)에서 결정론적으로 파생한다.
+ * - search: 새/재 탐색 시작 (필수 슬롯 충족 시)
+ * - next_candidate: 이미 찾은 후보 리스트에서 다음 후보 ("다른 곳")
+ * - fill_form: 신청 폼만 채움(미리보기). 실제 제출은 버튼 전용이라 여기 없음.
+ * - none: 클라는 메시지·상태만 갱신
+ */
+export const Action = z.enum(['search', 'next_candidate', 'fill_form', 'none']);
+export type Action = z.infer<typeof Action>;
 
 export const ApplicationField = z.enum([
   'organization',
@@ -113,9 +126,14 @@ export const ParseResponse = z.object({
   conversation_id: z.string().uuid(),
   filled_slots: FilledSlots,
   missing_required: z.array(z.string()),
-  intent: Intent,
   ready_to_search: z.boolean(),
   assistant_message: z.string(),
   application_state: ApplicationState,
+  /** 흐름-제어 화행. 클라는 cancel lifecycle 판단에만 쓴다(그 외엔 action 으로 충분). */
+  signal: Signal,
+  /** 클라가 실행만 하는 파생 액션(서버 reducer 산출). */
+  action: Action,
+  /** 후보 제안됨 ∧ 신청서 완성 — 폼/제출 버튼 노출 게이트. */
+  can_submit: z.boolean(),
 });
 export type ParseResponse = z.infer<typeof ParseResponse>;

@@ -54,7 +54,6 @@ model Conversation {
   status          ConversationStatus @default(active)
   history         Json
   title           String?           @db.VarChar(191)
-  lastIntent      String?            @map("last_intent") @db.VarChar(40)
   lastFilledSlots Json?              @map("last_filled_slots")
   lastApplicationState Json?         @map("last_application_state")
   confirmedReservationForm Json?     @map("confirmed_reservation_form")

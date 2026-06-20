@@ -29,14 +29,11 @@ export interface FilledSlots {
   space: string | null;
 }
 
-export type Intent =
-  | 'new_reservation'
-  | 'request_alternative'
-  | 'modify_slot'
-  | 'modify_application'
-  | 'confirm_reservation'
-  | 'cancel'
-  | 'out_of_scope';
+/** 흐름-제어 화행. 클라는 cancel lifecycle 판단에만 쓴다. */
+export type Signal = 'info' | 'accept' | 'request_alternative' | 'cancel' | 'out_of_scope';
+
+/** 서버 reducer 가 파생하는 실행 액션. 클라는 실행만 한다. */
+export type Action = 'search' | 'next_candidate' | 'fill_form' | 'none';
 
 export interface ReservationFormData {
   hangsaGbCode: string;
@@ -80,10 +77,15 @@ export interface ParseResult {
   conversation_id: string;
   filled_slots: FilledSlots;
   missing_required: string[];
-  intent: Intent;
   ready_to_search: boolean;
   assistant_message: string;
   application_state: ApplicationState;
+  /** 흐름-제어 화행(서버 파생). 클라는 cancel lifecycle 판단에만 쓴다. */
+  signal: Signal;
+  /** 서버 reducer 가 파생한 실행 액션. 클라는 분기 없이 실행만. */
+  action: Action;
+  /** 후보 제안됨 ∧ 신청서 완성 — 폼/제출 버튼 게이트. */
+  can_submit: boolean;
 }
 
 export interface ConversationSessionSummary {

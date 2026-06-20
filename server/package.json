@@ -14,7 +14,8 @@
     "verify:spaces": "tsx scripts/verify-space-personalization.ts",
     "verify:reminders": "tsx scripts/verify-reminder-space-code.ts",
     "verify:feedback": "tsx scripts/verify-space-feedback-route.ts",
-    "verify": "tsx scripts/verify-space-personalization.ts && tsx scripts/verify-reminder-space-code.ts && tsx scripts/verify-space-feedback-route.ts && tsx scripts/verify-application-memory.ts"
+    "verify:derive": "tsx scripts/verify-derive-action.ts",
+    "verify": "tsx scripts/verify-space-personalization.ts && tsx scripts/verify-reminder-space-code.ts && tsx scripts/verify-space-feedback-route.ts && tsx scripts/verify-application-memory.ts && tsx scripts/verify-derive-action.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

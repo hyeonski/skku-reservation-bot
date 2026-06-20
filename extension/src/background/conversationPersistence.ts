@@ -134,7 +134,6 @@ export async function hydrateContextFromServer(
     const ctx = getOrCreateContext(conversationId);
     ctx.history = dto.history;
     ctx.title = dto.title;
-    ctx.lastIntent = dto.lastIntent;
     ctx.lastFilledSlots = dto.lastFilledSlots;
     ctx.applicationState = dto.lastApplicationState;
     ctx.conversationStatus = dto.status;

@@ -16,7 +16,6 @@ export const UpsertConversationBody = z.object({
   history: z.array(ChatMessage),
   status: ConversationStatus.optional(), // 미지정 시 active 유지
   title: z.string().nullable().optional(),
-  lastIntent: z.string().nullable().optional(),
   lastFilledSlots: z.unknown().optional(),
   lastApplicationState: ApplicationState.nullable().optional(),
   confirmedReservationForm: ReservationFormData.nullable().optional(),
@@ -31,7 +30,6 @@ export const ConversationDto = z.object({
   status: ConversationStatus,
   title: z.string().nullable(),
   history: z.array(ChatMessage),
-  lastIntent: z.string().nullable(),
   lastFilledSlots: z.unknown(),
   lastApplicationState: ApplicationState.nullable(),
   confirmedReservationForm: ReservationFormData.nullable(),
