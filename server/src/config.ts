@@ -14,7 +14,7 @@ const envSchema = z.object({
     .pipe(z.number().int().positive()),
   LLM_API_KEY: z.string().min(1, 'LLM_API_KEY is required'),
   LLM_BASE_URL: z.string().url().optional().default('https://api.deepseek.com'),
-  LLM_MODEL: z.string().min(1).optional().default('deepseek-chat'),
+  LLM_MODEL: z.string().min(1).optional().default('deepseek-v4-flash'),
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
 });
 

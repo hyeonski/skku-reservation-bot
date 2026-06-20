@@ -87,7 +87,7 @@
 - 서버는 LLM 파싱, 대화·신청 이력 mirror, 공간 후보 조회, 반복 패턴 기반 리마인더 생성에 한정.
 
 ### 스택 (현재 구현)
-- LLM: DeepSeek-Chat (`deepseek-chat`, OpenAI 호환 API)
+- LLM: DeepSeek V4 Flash (`deepseek-v4-flash`, OpenAI 호환 API)
 - 서버: TypeScript + Fastify + Prisma + MySQL
 - 자동화: Chrome Extension API + background service worker + content script + main-world bridge
 - 알림: `chrome.notifications` (예약 완료 시점)
