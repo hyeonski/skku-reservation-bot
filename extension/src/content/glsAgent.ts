@@ -395,9 +395,15 @@ function coversDate(row: SpaceScheduleRow, date: string): boolean {
     const rs = m[1]! + m[2]! + m[3]!;
     const re = m[4]! + m[5]! + m[6]!;
     if (date < rs || date > re) return false;
-    // 수업 행의 INFO2 기간은 "현재 표시 주간"에 해당하는 경우가 있어,
-    // GANGJWA_START_DATE 의 요일까지 다시 비교하면 실제로 보이는 수업이 누락된다.
-    // 기간 안에만 들어오면 현재 날짜 문맥의 충돌로 본다.
+    // INFO2 기간은 "현재 표시 주간"(월~일) 전체를 가리키므로, 기간에 들었다고
+    // 바로 충돌이 아니다. 이 행의 실제 점유 요일은 GANGJWA_START_DATE 의 요일이다.
+    // (검증 2026-06-21: 첨단강의실 21534 의 월요일 수업이 같은 주의 수요일 시간표에도
+    //  실려 있어, 요일 비교를 빼면 비어있는 수요일이 충돌로 오판된다.)
+    // 따라서 요청일과 GANGJWA_START_DATE 의 요일이 같을 때만 충돌로 본다.
+    if (isCompactDate(row.GANGJWA_START_DATE)) {
+      return dayOfWeek(row.GANGJWA_START_DATE) === dayOfWeek(date);
+    }
+    // 시작일을 알 수 없으면 보수적으로 기간 겹침을 충돌로 본다.
     return true;
   }
 

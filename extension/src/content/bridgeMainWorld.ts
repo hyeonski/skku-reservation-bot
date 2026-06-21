@@ -1556,6 +1556,12 @@ declare global {
       const seen = new Set(entries.map((entry) => entry.text));
       for (const el of Array.from(document.querySelectorAll<HTMLElement>('div, span, p'))) {
         if (!isVisible(el)) continue;
+        // leaf 노드만 본다. 상위 컨테이너(예: popup .form)는 innerText 가 모달 전체를
+        // 합쳐버려, 그리드 범례의 "대여불가" 라벨과 안내문의 무관한 시간대
+        // (예: "승인은 평일 09:00~17:00") 가 한 텍스트로 묶여 가짜 대여불가 충돌이
+        // 생긴다 (검증 2026-06-21, 반도체관 첨단강의실). 실제 차단 배너는 짧은
+        // leaf 텍스트이므로 길이 상한도 함께 좁힌다.
+        if (el.childElementCount !== 0) continue;
         let cur: HTMLElement | null = el;
         let inPopup = false;
         while (cur) {
@@ -1569,7 +1575,7 @@ declare global {
         const text = String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim();
         if (
           text.length < 8 ||
-          text.length > 800 ||
+          text.length > 300 ||
           seen.has(text) ||
           !/대여불가|예약불가|신청불가|점검|장애/.test(text)
         ) {
